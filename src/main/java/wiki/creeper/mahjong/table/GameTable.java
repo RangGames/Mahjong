@@ -27,11 +27,14 @@ import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.event.ClickCallback;
 import net.kyori.adventure.text.format.NamedTextColor;
 import org.bukkit.Bukkit;
+import org.bukkit.Material;
 import org.bukkit.boss.BarColor;
 import org.bukkit.boss.BarStyle;
 import org.bukkit.boss.BossBar;
 import org.bukkit.entity.Player;
+import org.bukkit.inventory.Inventory;
 import org.bukkit.inventory.ItemStack;
+import org.bukkit.inventory.meta.ItemMeta;
 import org.bukkit.plugin.java.JavaPlugin;
 import org.bukkit.scheduler.BukkitTask;
 import wiki.creeper.mahjong.ai.BotAction;
@@ -62,6 +65,8 @@ import wiki.creeper.mahjong.game.MeldType;
 import wiki.creeper.mahjong.game.ScoreCalculator;
 import wiki.creeper.mahjong.game.ScoreResult;
 import wiki.creeper.mahjong.ui.HandInventory;
+import wiki.creeper.mahjong.ui.RoomInventory;
+import wiki.creeper.mahjong.ui.RoomMenuType;
 import wiki.creeper.mahjong.ui.UiManager;
 import wiki.creeper.mahjong.ui.WorldUiManager;
 import wiki.creeper.mahjong.storage.GameEvent;
@@ -70,7 +75,7 @@ import wiki.creeper.mahjong.storage.GameEventType;
 
 public class GameTable {
 
-    private static final int MAX_PLAYERS = 4;
+    static final int MAX_PLAYERS = 4;
     private static final int COACH_OVERLAY_SECONDS = 6;
 
     private final UUID id = UUID.randomUUID();
@@ -80,12 +85,14 @@ public class GameTable {
     private final Map<UUID, HandInventory> handInventories = new HashMap<>();
     private final UiManager uiManager;
     private final WorldUiManager worldUi;
+    private final GameTableDialogs dialogs;
+    private final GameTableRoomUi roomUi;
     private final GameEventLogger eventLogger = new GameEventLogger();
     private final Set<UUID> furitenNotified = new HashSet<>();
-    private final Set<UUID> callDialogPlayers = new HashSet<>();
     private final Set<UUID> readyPlayers = new HashSet<>();
     private final Map<UUID, BotProfile> bots = new HashMap<>();
     private final Map<UUID, BukkitTask> botTurnTasks = new HashMap<>();
+    private final Map<UUID, String> displayNameCache = new HashMap<>();
     private final Set<UUID> coachPlayers = new HashSet<>();
     private final Map<UUID, CoachAdvice> coachAdviceCache = new HashMap<>();
     private final Map<UUID, BossBar> coachBars = new HashMap<>();
@@ -104,9 +111,14 @@ public class GameTable {
     private BukkitTask callTask;
     private BossBar callBossBar;
     private BukkitTask callBossBarTask;
-    private BossBar roomBossBar;
+    private BossBar turnBossBar;
+    private BukkitTask turnBossBarTask;
+    private BukkitTask nextHandTask;
+    private UUID turnTimerPlayer;
     private BukkitTask botCallTask;
     private int lastLoggedDrawSequence;
+    private int turnSecondsRemaining = -1;
+    private int callSecondsRemaining = -1;
     private boolean botsEnabled;
     private boolean coachEnabled;
     private boolean coachRankDisabled;
@@ -118,6 +130,8 @@ public class GameTable {
         this.plugin = plugin;
         this.uiManager = new UiManager(plugin);
         this.worldUi = new WorldUiManager(plugin, id);
+        this.dialogs = new GameTableDialogs(this);
+        this.roomUi = new GameTableRoomUi(this);
         loadRoomOptions();
     }
 
@@ -136,9 +150,49 @@ public class GameTable {
         return engine;
     }
 
+    JavaPlugin getPlugin() {
+        return plugin;
+    }
+
+    WorldUiManager getWorldUi() {
+        return worldUi;
+    }
+
+    GameTableDialogs getDialogs() {
+        return dialogs;
+    }
+
+    Map<SeatWind, UUID> getSeatAssignments() {
+        return Collections.unmodifiableMap(seatAssignments);
+    }
+
+    Map<UUID, SeatWind> getPlayerSeats() {
+        return Collections.unmodifiableMap(playerSeats);
+    }
+
+    Set<UUID> getReadyPlayers() {
+        return Collections.unmodifiableSet(readyPlayers);
+    }
+
+    Set<UUID> getCoachPlayers() {
+        return Collections.unmodifiableSet(coachPlayers);
+    }
+
+    Map<UUID, BotProfile> getBots() {
+        return Collections.unmodifiableMap(bots);
+    }
+
+    public int getTurnSecondsRemaining() {
+        return turnSecondsRemaining;
+    }
+
+    public String getDisplayName(UUID playerId) {
+        return resolveName(playerId);
+    }
+
     public String getStatusLine() {
         StringBuilder sb = new StringBuilder();
-        sb.append("Table ").append(id).append(" state=").append(getState());
+        sb.append("코치: 추천 버림패 ");
         if (engine != null) {
             sb.append(" active=").append(resolveName(engine.getActivePlayer()));
             sb.append(" remaining=").append(engine.getRoundState().getRemainingTiles());
@@ -218,7 +272,7 @@ public class GameTable {
         return coachRankDisabled;
     }
 
-    private boolean isBot(UUID playerId) {
+    boolean isBot(UUID playerId) {
         return playerId != null && bots.containsKey(playerId);
     }
 
@@ -230,19 +284,23 @@ public class GameTable {
     }
 
     public List<String> getRoomStatusLines() {
-        List<String> lines = new ArrayList<>();
-        String code = roomCode == null ? "-" : roomCode;
-        String hostName = hostId == null ? "-" : resolveName(hostId);
-        lines.add("Room " + code + " host=" + hostName + " players=" + players.size() + "/" + MAX_PLAYERS);
-        lines.add("Seats: " + seatAssignments.size() + "/" + MAX_PLAYERS);
-        lines.add("Ready: " + getReadyCount() + "/" + players.size());
-        lines.add("Rules: " + describeRules(getRulesSnapshot()));
-        for (UUID playerId : players) {
-            String state = isBot(playerId) ? "BOT" : (readyPlayers.contains(playerId) ? "READY" : "WAIT");
-            String seat = seatLabel(playerSeats.get(playerId));
-            lines.add("- " + resolveName(playerId) + " [" + seat + "/" + state + "]");
-        }
-        return lines;
+        return roomUi.getRoomStatusLines();
+    }
+
+    public void openRoomLobbyGui(Player player) {
+        roomUi.openRoomLobbyGui(player);
+    }
+
+    public void openRoomRulesGui(Player player) {
+        roomUi.openRoomRulesGui(player);
+    }
+
+    public void showRoomRules(Player player) {
+        roomUi.showRoomRules(player);
+    }
+
+    public void showRoomLobby(Player player) {
+        roomUi.showRoomLobby(player);
     }
 
     public void enableRoom(Player host, String code) {
@@ -268,7 +326,7 @@ public class GameTable {
             return false;
         }
         if (!playerSeats.containsKey(playerId)) {
-            player.sendMessage("레디하기 전에 좌석을 선택해 주세요.");
+            player.sendMessage("준비하기 전에 좌석을 선택해 주세요.");
             return false;
         }
         boolean ready = readyPlayers.contains(playerId);
@@ -277,10 +335,14 @@ public class GameTable {
         } else {
             readyPlayers.add(playerId);
         }
-        String state = ready ? "준비 해제" : "준비 완료";
-        broadcast(resolveName(playerId) + " " + state + " (" + readyPlayers.size() + "/" + players.size() + ").");
+        String state = ready ? "준비를 해제했어요" : "준비를 완료했어요";
+        broadcast(resolveName(playerId) + " 님이 " + state + " (" + readyPlayers.size() + "/" + players.size() + ").");
         updateRoomLobbyUi();
         return true;
+    }
+
+    public boolean requestSeat(Player player, SeatWind seat) {
+        return assignSeat(player, seat);
     }
 
     public boolean applyPreset(String presetKey) {
@@ -334,6 +396,7 @@ public class GameTable {
                 open = value != null ? value : !open;
                 break;
             case "ippatsu":
+            case "일발":
                 ippatsu = value != null ? value : !ippatsu;
                 break;
             case "uradora":
@@ -342,6 +405,7 @@ public class GameTable {
                 break;
             case "bots":
             case "bot":
+            case "봇":
                 botsFlag = value != null ? value : !botsFlag;
                 break;
             case "coach":
@@ -363,54 +427,10 @@ public class GameTable {
             removeAllBots();
         }
         if (coachWasAllowed && !isCoachAllowed()) {
-            disableCoachForAll("이 방에서는 코치가 비활성화되어 있어요.");
+            disableCoachForAll("이 테이블에서는 코치가 비활성화되어 있어요.");
         }
         broadcastRoomRules();
         return true;
-    }
-
-    public void showRoomRules(Player player) {
-        if (player == null) {
-            return;
-        }
-        if (!roomMode) {
-            player.sendMessage("이 테이블은 방 모드가 아니에요.");
-            return;
-        }
-        if (!isHost(player.getUniqueId())) {
-            player.sendMessage("방장만 룰을 변경할 수 있어요.");
-            return;
-        }
-        if (getState() != GameState.LOBBY) {
-            player.sendMessage("게임 시작 후에는 룰을 바꿀 수 없어요.");
-            return;
-        }
-        if (dialogsEnabled()) {
-            showRoomRulesDialog(player);
-            return;
-        }
-        sendRoomRulesSummary(player);
-    }
-
-    public void showRoomLobby(Player player) {
-        if (player == null) {
-            return;
-        }
-        if (!roomMode) {
-            player.sendMessage("이 테이블은 방 모드가 아니에요.");
-            return;
-        }
-        if (getState() != GameState.LOBBY) {
-            player.sendMessage("게임 시작 후에는 로비 화면을 열 수 없어요.");
-            return;
-        }
-        if (dialogsEnabled()) {
-            showRoomLobbyDialog(player);
-            return;
-        }
-        for (String line : getRoomStatusLines()) {
-            player.sendMessage(line);
-        }
     }
 
     public boolean addPlayer(Player player) {
@@ -423,9 +443,13 @@ public class GameTable {
         }
         boolean added = players.add(playerId);
         if (added) {
+            displayNameCache.put(playerId, player.getName());
             readyPlayers.remove(playerId);
+            if (worldUi.isSpawned()) {
+                worldUi.hideHandDisplaysFor(player);
+            }
             if (roomMode) {
-                broadcast(resolveName(playerId) + " 님이 방에 입장했어요 (" + players.size() + "/" + MAX_PLAYERS + ").");
+                broadcast(resolveName(playerId) + " 님이 테이블에 입장했어요 (" + players.size() + "/" + MAX_PLAYERS + ").");
                 autoAssignSeat(playerId);
                 updateRoomLobbyUi();
             }
@@ -440,17 +464,24 @@ public class GameTable {
             return false;
         }
         readyPlayers.remove(playerId);
+        if (worldUi.isSpawned()) {
+            worldUi.clearHandDisplay(playerId);
+        }
+        displayNameCache.remove(playerId);
         coachPlayers.remove(playerId);
         coachAdviceCache.remove(playerId);
         clearCoachOverlay(playerId);
         cancelReplay(playerId);
+        if (playerId.equals(turnTimerPlayer)) {
+            cancelTurnTimer();
+        }
         if (roomMode) {
-            broadcast(resolveName(playerId) + " 님이 방에서 나갔어요 (" + players.size() + "/" + MAX_PLAYERS + ").");
+            broadcast(resolveName(playerId) + " 님이 테이블에서 나갔어요 (" + players.size() + "/" + MAX_PLAYERS + ").");
             clearSeat(playerId, true);
             if (playerId.equals(hostId)) {
                 hostId = resolveNextHost();
                 if (hostId != null) {
-                    broadcast("새 방장: " + resolveName(hostId));
+                    broadcast("새 호스트: " + resolveName(hostId));
                     if (!playerSeats.containsKey(hostId)) {
                         autoAssignSeat(hostId);
                     }
@@ -472,9 +503,10 @@ public class GameTable {
         long seed = ThreadLocalRandom.current().nextLong();
         BotProfile profile = new BotProfile(botId, difficulty, seed, buildBotName(difficulty));
         bots.put(botId, profile);
+        displayNameCache.put(botId, profile.getName());
         players.add(botId);
         if (roomMode) {
-            broadcast(resolveName(botId) + " 님이 방에 입장했어요 (" + players.size() + "/" + MAX_PLAYERS + ").");
+            broadcast(resolveName(botId) + " 님이 테이블에 입장했어요 (" + players.size() + "/" + MAX_PLAYERS + ").");
             autoAssignSeat(botId);
             updateRoomLobbyUi();
         }
@@ -525,7 +557,11 @@ public class GameTable {
         String name = resolveName(botId);
         players.remove(botId);
         bots.remove(botId);
+        displayNameCache.remove(botId);
         readyPlayers.remove(botId);
+        if (worldUi.isSpawned()) {
+            worldUi.clearHandDisplay(botId);
+        }
         coachPlayers.remove(botId);
         coachAdviceCache.remove(botId);
         clearCoachOverlay(botId);
@@ -535,7 +571,7 @@ public class GameTable {
             hostId = resolveNextHost();
         }
         if (roomMode) {
-            broadcast(name + " 님이 방에서 나갔어요 (" + players.size() + "/" + MAX_PLAYERS + ").");
+            broadcast(name + " 님이 테이블에서 나갔어요 (" + players.size() + "/" + MAX_PLAYERS + ").");
         }
         if (updateUi) {
             updateRoomLobbyUi();
@@ -547,7 +583,7 @@ public class GameTable {
         return "Bot-" + difficulty.name() + "-" + botSequence;
     }
 
-    private boolean hasBotDifficulty(BotDifficulty difficulty) {
+    boolean hasBotDifficulty(BotDifficulty difficulty) {
         if (difficulty == null) {
             return false;
         }
@@ -564,12 +600,12 @@ public class GameTable {
             return false;
         }
         if (!roomMode) {
-            player.sendMessage("코치는 방에서만 사용할 수 있어요.");
+            player.sendMessage("코치는 테이블에서만 사용할 수 있어요.");
             return false;
         }
         UUID playerId = player.getUniqueId();
         if (!players.contains(playerId)) {
-            player.sendMessage("이 방에 참여 중이 아니에요.");
+            player.sendMessage("이 테이블에 참여 중이 아니에요.");
             return false;
         }
         if (isBot(playerId)) {
@@ -578,9 +614,9 @@ public class GameTable {
         }
         if (!isCoachAllowed()) {
             if (coachRankDisabled) {
-                player.sendMessage("랭크 룸에서는 코치를 사용할 수 없어요.");
+                player.sendMessage("랭크 제한에서는 코치를 사용할 수 없어요.");
             } else {
-                player.sendMessage("이 방에서는 코치가 비활성화되어 있어요.");
+                player.sendMessage("이 테이블에서는 코치가 비활성화되어 있어요.");
             }
             return false;
         }
@@ -655,6 +691,7 @@ public class GameTable {
     }
 
     public boolean startNextHand() {
+        cancelAutoNextHand();
         if (engine == null || engine.getState() != GameState.HAND_END) {
             return false;
         }
@@ -732,6 +769,10 @@ public class GameTable {
 
     public void requestDiscard(Player player, ItemStack item) {
         queue.enqueue(() -> requestDiscardInternal(player, item));
+    }
+
+    public void requestDiscardByInstance(Player player, int instanceId) {
+        queue.enqueue(() -> requestDiscardInternal(player, instanceId));
     }
 
     public void handleDiscard(Player player, ItemStack item) {
@@ -815,7 +856,7 @@ public class GameTable {
             }
             int i = index.getAndIncrement();
             if (i >= events.size()) {
-                player.sendMessage("리플레이가 끝났어요.");
+                player.sendMessage("리플레이가 종료됐어요.");
                 cancelReplay(playerId);
                 return;
             }
@@ -838,12 +879,14 @@ public class GameTable {
 
     public void shutdown() {
         queue.clear();
+        cancelAutoNextHand();
         if (callTask != null) {
             callTask.cancel();
             callTask = null;
         }
         clearCallBossBar();
-        clearCallDialogs();
+        cancelTurnTimer();
+        dialogs.clearCallDialogs();
         clearRoomBossBar();
         cancelAllReplays();
         cancelAllBotTurns();
@@ -855,13 +898,18 @@ public class GameTable {
 
     private void resetToLobby() {
         engine = null;
+        cancelAutoNextHand();
         state = GameState.LOBBY;
         playerStates = null;
         roundState = null;
         furitenNotified.clear();
-        callDialogPlayers.clear();
+        dialogs.clearCallDialogs();
+        if (worldUi.isSpawned()) {
+            worldUi.clearAllHandDisplays();
+        }
         cancelAllBotTurns();
         cancelBotCalls();
+        cancelTurnTimer();
         coachAdviceCache.clear();
         clearCoachOverlays();
         if (roomMode) {
@@ -932,7 +980,7 @@ public class GameTable {
     }
 
     private void requestDiscardInternal(Player player, ItemStack item) {
-        if (!shouldConfirmDiscard()) {
+        if (!dialogs.shouldConfirmDiscard()) {
             handleDiscardInternal(player, item);
             return;
         }
@@ -942,7 +990,7 @@ public class GameTable {
         }
         UUID playerId = player.getUniqueId();
         if (!playerId.equals(engine.getActivePlayer())) {
-            player.sendMessage("지금은 당신 차례가 아니에요.");
+            player.sendMessage("지금은 내 차례가 아니에요.");
             return;
         }
         PlayerState state = engine.getPlayerState(playerId);
@@ -952,24 +1000,56 @@ public class GameTable {
         }
         Optional<Tile> tile = uiManager.readTile(item, state);
         if (tile.isEmpty()) {
-            player.sendMessage("선택한 타일이 유효하지 않아요.");
+            player.sendMessage("선택한 패가 유효하지 않아요.");
             return;
         }
         if (!engine.canDiscard(playerId, tile.get())) {
-            player.sendMessage("이 타일은 버릴 수 없어요.");
+            player.sendMessage("해당 패는 버릴 수 없어요.");
             return;
         }
-        showDiscardConfirmDialog(player, tile.get(), item);
+        dialogs.showDiscardConfirmDialog(player, tile.get(), item);
     }
 
-    private void handleDiscardInternal(Player player, ItemStack item) {
+    private void requestDiscardInternal(Player player, int instanceId) {
+        if (!dialogs.shouldConfirmDiscard()) {
+            handleDiscardInternal(player, instanceId);
+            return;
+        }
         if (engine == null) {
             player.sendMessage("게임이 아직 시작되지 않았어요.");
             return;
         }
         UUID playerId = player.getUniqueId();
         if (!playerId.equals(engine.getActivePlayer())) {
-            player.sendMessage("지금은 당신 차례가 아니에요.");
+            player.sendMessage("지금은 내 차례가 아니에요.");
+            return;
+        }
+        PlayerState state = engine.getPlayerState(playerId);
+        if (state == null) {
+            player.sendMessage("플레이어 상태를 찾을 수 없어요.");
+            return;
+        }
+        Tile tile = resolveTileByInstance(state, instanceId);
+        if (tile == null) {
+            player.sendMessage("선택한 패가 유효하지 않아요.");
+            return;
+        }
+        if (!engine.canDiscard(playerId, tile)) {
+            player.sendMessage("해당 패는 버릴 수 없어요.");
+            return;
+        }
+        ItemStack payload = uiManager.createTileItem(tile);
+        dialogs.showDiscardConfirmDialog(player, tile, payload);
+    }
+
+    void handleDiscardInternal(Player player, ItemStack item) {
+        if (engine == null) {
+            player.sendMessage("게임이 아직 시작되지 않았어요.");
+            return;
+        }
+        UUID playerId = player.getUniqueId();
+        if (!playerId.equals(engine.getActivePlayer())) {
+            player.sendMessage("지금은 내 차례가 아니에요.");
             return;
         }
         PlayerState state = engine.getPlayerState(playerId);
@@ -979,22 +1059,54 @@ public class GameTable {
         }
         Optional<Tile> tile = uiManager.readTile(item, state);
         if (tile.isEmpty()) {
-            player.sendMessage("선택한 타일이 유효하지 않아요.");
+            player.sendMessage("선택한 패가 유효하지 않아요.");
             return;
         }
-        if (!engine.discard(playerId, tile.get())) {
-            player.sendMessage("이 타일은 버릴 수 없어요.");
+        completeDiscard(player, tile.get());
+    }
+
+    void handleDiscardInternal(Player player, int instanceId) {
+        if (engine == null) {
+            player.sendMessage("게임이 아직 시작되지 않았어요.");
             return;
         }
-        closeDialog(player);
-        eventLogger.record(new GameEvent(id, playerId, GameEventType.DISCARD, buildTilePayload(tile.get())));
+        UUID playerId = player.getUniqueId();
+        if (!playerId.equals(engine.getActivePlayer())) {
+            player.sendMessage("지금은 내 차례가 아니에요.");
+            return;
+        }
+        PlayerState state = engine.getPlayerState(playerId);
+        if (state == null) {
+            player.sendMessage("플레이어 상태를 찾을 수 없어요.");
+            return;
+        }
+        Tile tile = resolveTileByInstance(state, instanceId);
+        if (tile == null) {
+            player.sendMessage("선택한 패가 유효하지 않아요.");
+            return;
+        }
+        completeDiscard(player, tile);
+    }
+
+    private void completeDiscard(Player player, Tile tile) {
+        if (engine == null) {
+            player.sendMessage("게임이 아직 시작되지 않았어요.");
+            return;
+        }
+        UUID playerId = player.getUniqueId();
+        if (!engine.discard(playerId, tile)) {
+            player.sendMessage("해당 패는 버릴 수 없어요.");
+            return;
+        }
+        cancelTurnTimer();
+        dialogs.closeDialog(player);
+        eventLogger.record(new GameEvent(id, playerId, GameEventType.DISCARD, dialogs.buildTilePayload(tile)));
         lastAction = "DISCARD";
         updateHand(playerId, false);
-        broadcast(player.getName() + " 님이 " + tile.get().getId().toShortString() + "을(를) 버렸어요.");
-        notifyCoachAfterDiscard(playerId, tile.get());
+        broadcast(player.getName() + " 님이 " + tile.getId().toShortString() + "을(를) 버렸어요.");
+        notifyCoachAfterDiscard(playerId, tile);
         updateWorldUi();
         int seconds = plugin.getConfig().getInt("timers.callWindowSeconds", 5);
-        broadcast("울기 창 열림 (" + seconds + "s). /mj ron|pon|chi|kan 사용");
         notifyCallOptions(seconds);
         scheduleCallResolution();
         updateWorldUiActions(seconds);
@@ -1006,14 +1118,14 @@ public class GameTable {
             return;
         }
         if (engine.getState() != GameState.CALL_WINDOW) {
-            player.sendMessage("현재 울기(콜) 창이 열려 있지 않아요.");
+            player.sendMessage("지금은 호출 창이 열려 있지 않아요.");
             return;
         }
         UUID playerId = player.getUniqueId();
         if (!engine.canRon(playerId)) {
             PlayerState state = engine.getPlayerState(playerId);
             if (state != null && state.getHand().isFuriten()) {
-                player.sendMessage("후리텐 상태라 론할 수 없어요.");
+                player.sendMessage("후리텐 상태라 론을 할 수 없어요.");
             } else {
                 player.sendMessage("론이 가능한 상태가 아니에요.");
             }
@@ -1021,7 +1133,7 @@ public class GameTable {
         }
         Tile lastDiscard = engine.getLastDiscard();
         if (lastDiscard == null) {
-            player.sendMessage("버림패가 없어요.");
+            player.sendMessage("마지막 버림패가 없어요.");
             return;
         }
         engine.addCallRequest(new CallRequest(playerId, CallType.RON, List.of(lastDiscard)));
@@ -1039,7 +1151,7 @@ public class GameTable {
             return;
         }
         if (engine.getState() != GameState.CALL_WINDOW) {
-            player.sendMessage("현재 울기(콜) 창이 열려 있지 않아요.");
+            player.sendMessage("지금은 호출 창이 열려 있지 않아요.");
             return;
         }
         Optional<CallRequest> request = engine.createChiRequest(player.getUniqueId(), optionIndex);
@@ -1058,7 +1170,7 @@ public class GameTable {
             return;
         }
         if (engine.getState() != GameState.CALL_WINDOW) {
-            player.sendMessage("현재 울기(콜) 창이 열려 있지 않아요.");
+            player.sendMessage("지금은 호출 창이 열려 있지 않아요.");
             return;
         }
         UUID playerId = player.getUniqueId();
@@ -1071,8 +1183,8 @@ public class GameTable {
             requestChiInternal(player, 1);
             return;
         }
-        if (!dialogsEnabled()) {
-            player.sendMessage("여러 치 선택지가 있어요. /mj chi <1-" + chiCount + ">으로 선택해 주세요.");
+        if (!dialogs.isEnabled()) {
+            player.sendMessage("치 선택지가 여러 개예요. /mj chi <1-" + chiCount + ">로 선택해 주세요.");
             return;
         }
         List<CallOption> options = resolveChiChoices(playerId);
@@ -1080,7 +1192,7 @@ public class GameTable {
             player.sendMessage("치가 가능한 상태가 아니에요.");
             return;
         }
-        showChiDialog(player, options);
+        dialogs.showChiDialog(player, options);
     }
 
     private void requestKanInternal(Player player, int optionIndex) {
@@ -1098,7 +1210,7 @@ public class GameTable {
         }
         UUID playerId = player.getUniqueId();
         if (!playerId.equals(engine.getActivePlayer())) {
-            player.sendMessage("지금은 당신 차례가 아니에요.");
+            player.sendMessage("지금은 내 차례가 아니에요.");
             return;
         }
         List<KanOption> options = engine.getSelfKanOptions(playerId);
@@ -1109,11 +1221,11 @@ public class GameTable {
         if (optionIndex <= 0) {
             if (options.size() == 1) {
                 optionIndex = 1;
-            } else if (dialogsEnabled()) {
-                showSelfKanDialog(player, options);
+            } else if (dialogs.isEnabled()) {
+                dialogs.showSelfKanDialog(player, options);
                 return;
             } else {
-                player.sendMessage("여러 깡 선택지가 있어요. /mj kan <1-" + options.size() + ">으로 선택해 주세요.");
+                player.sendMessage("깡 선택지가 여러 개예요. /mj kan <1-" + options.size() + ">로 선택해 주세요.");
                 return;
             }
         }
@@ -1125,10 +1237,10 @@ public class GameTable {
             player.sendMessage("깡이 가능한 상태가 아니에요.");
             return;
         }
-        closeDialog(player);
+        dialogs.closeDialog(player);
         KanOption option = options.get(optionIndex - 1);
-        eventLogger.record(new GameEvent(id, playerId, GameEventType.CALL, buildKanPayload(option)));
-        broadcast(player.getName() + " declared " + describeSelfKan(option) + ".");
+        eventLogger.record(new GameEvent(id, playerId, GameEventType.CALL, dialogs.buildKanPayload(option)));
+        broadcast(player.getName() + " 님이 깡을 선언했어요.");
         updateHand(playerId, true);
         broadcastDoraIndicators();
         if (engine.getState() == GameState.HAND_END) {
@@ -1148,7 +1260,7 @@ public class GameTable {
             player.sendMessage("리치가 가능한 상태가 아니에요.");
             return;
         }
-        closeDialog(player);
+        dialogs.closeDialog(player);
         eventLogger.record(new GameEvent(id, playerId, GameEventType.RIICHI, "state=declare"));
         lastAction = "RIICHI";
         broadcast(player.getName() + " 님이 리치를 선언했어요.");
@@ -1165,7 +1277,7 @@ public class GameTable {
             player.sendMessage("쯔모가 가능한 상태가 아니에요.");
             return;
         }
-        closeDialog(player);
+        dialogs.closeDialog(player);
         endHand();
     }
 
@@ -1178,22 +1290,22 @@ public class GameTable {
             return;
         }
         if (getState() != GameState.LOBBY) {
-            player.sendMessage("이미 게임이 시작되었어요.");
+            player.sendMessage("이미 게임이 시작됐어요.");
             return;
         }
         UUID playerId = player.getUniqueId();
         if (roomMode) {
             if (!isHost(playerId)) {
-                player.sendMessage("방장만 게임을 시작할 수 있어요.");
+                player.sendMessage("호스트만 게임을 시작할 수 있어요.");
                 return;
             }
             if (!areAllReady()) {
-                player.sendMessage("시작할 수 없어요. 모두 레디해야 해요 (" + readyPlayers.size() + "/" + players.size() + ").");
+                player.sendMessage("시작하려면 모두 준비해야 해요 (" + readyPlayers.size() + "/" + players.size() + ").");
                 return;
             }
         }
         if (start()) {
-            closeDialogsForAll();
+            dialogs.closeDialogsForAll();
             broadcast("게임을 시작했어요.");
         } else {
             player.sendMessage("시작 조건이 맞지 않아요. 4명 + 로비 상태여야 해요.");
@@ -1206,7 +1318,7 @@ public class GameTable {
             return;
         }
         if (engine.getState() != GameState.CALL_WINDOW) {
-            player.sendMessage("현재 울기(콜) 창이 열려 있지 않아요.");
+            player.sendMessage("지금은 호출 창이 열려 있지 않아요.");
             return;
         }
         Optional<CallRequest> request;
@@ -1225,11 +1337,11 @@ public class GameTable {
                 break;
         }
         if (request.isEmpty()) {
-            player.sendMessage(callName(type) + "을(를) 할 수 없는 상태예요.");
+            player.sendMessage("지금은 " + callName(type) + "이(가) 불가능해요.");
             return;
         }
         engine.addCallRequest(request.get());
-        player.sendMessage(callName(type) + "을(를) 선언했어요.");
+        player.sendMessage("치를 선언했어요.");
         resolveCallWindow();
     }
 
@@ -1253,8 +1365,8 @@ public class GameTable {
             callTask = null;
         }
         clearCallBossBar();
-        clearCallPopups();
-        clearCallDialogs();
+        dialogs.clearCallPopups();
+        dialogs.clearCallDialogs();
         cancelBotCalls();
         if (engine == null) {
             return;
@@ -1273,7 +1385,7 @@ public class GameTable {
         UUID active = engine.getActivePlayer();
         if (resolved != null) {
             eventLogger.record(new GameEvent(id, resolved.getPlayerId(), GameEventType.CALL,
-                    buildCallPayload(resolved, lastDiscard, lastDiscarder)));
+                    dialogs.buildCallPayload(resolved, lastDiscard, lastDiscarder)));
             lastAction = "CALL";
             updateHand(resolved.getPlayerId(), true);
             if (resolved.getType() == CallType.KAN) {
@@ -1292,7 +1404,8 @@ public class GameTable {
             callTask = null;
         }
         clearCallBossBar();
-        clearCallDialogs();
+        cancelTurnTimer();
+        dialogs.clearCallDialogs();
         coachAdviceCache.clear();
         clearCoachOverlays();
         if (engine == null) {
@@ -1308,10 +1421,10 @@ public class GameTable {
         if (winner != null) {
             updateHand(winner, true);
             String name = resolveName(winner);
-            String suffix = engine.isTsumoWin() ? " (tsumo)" : "";
-            eventLogger.record(new GameEvent(id, winner, GameEventType.WIN, buildWinPayload(engine.isTsumoWin(), discarder)));
+            String suffix = engine.isTsumoWin() ? " (쯔모)" : "";
+            eventLogger.record(new GameEvent(id, winner, GameEventType.WIN, dialogs.buildWinPayload(engine.isTsumoWin(), discarder)));
             lastAction = "WIN";
-            broadcast("승자: " + name + suffix + ".");
+            broadcast("화료: " + name + suffix + ".");
             score = settlePoints(winner);
             broadcastScore(score);
             broadcastPoints();
@@ -1319,7 +1432,7 @@ public class GameTable {
             updateWorldUi();
         } else {
             tenpaiPlayers = resolveTenpaiPlayers();
-            eventLogger.record(new GameEvent(id, null, GameEventType.RYUUKYOKU, buildRyuukyokuPayload(tenpaiPlayers)));
+            eventLogger.record(new GameEvent(id, null, GameEventType.RYUUKYOKU, dialogs.buildRyuukyokuPayload(tenpaiPlayers)));
             lastAction = "RYUUKYOKU";
             broadcast("유국입니다.");
             broadcastTenpai(tenpaiPlayers);
@@ -1332,19 +1445,19 @@ public class GameTable {
         Map<UUID, Integer> deltas = computePointDeltas(beforePoints, afterPoints);
         HandResult result = new HandResult(winner, discarder, engine.isTsumoWin(), score, tenpaiPlayers,
                 deltas, afterPoints, honbaApplied, riichiPotApplied, isGameOver(), engine.getRoundState());
-        updateWorldHandResult(result);
-        if (dialogsEnabled()) {
-            showHandResultDialogs(result);
+        dialogs.updateWorldHandResult(result);
+        if (dialogs.isEnabled()) {
+            dialogs.showHandResultDialogs(result);
         }
         if (result.gameOver) {
             logGameEnd();
-            broadcast("게임이 종료됐어요.");
+            broadcast("게임이 종료되었어요.");
             resetToLobby();
         } else {
-            broadcast("계속하려면 /mj nexthand 를 사용해 주세요.");
+            scheduleAutoNextHand();
         }
-    }
 
+    }
     private void updateHand(UUID playerId, boolean openIfNeeded) {
         if (engine == null) {
             return;
@@ -1359,11 +1472,29 @@ public class GameTable {
         HandInventory holder = handInventories.computeIfAbsent(playerId, uiManager::createHandInventory);
         uiManager.renderHand(holder.getInventory(), state);
         Player player = plugin.getServer().getPlayer(playerId);
-        if (player != null && openIfNeeded) {
+        if (plugin.getConfig().getBoolean("ui.preferWorld", false)) {
+            ensureWorldUi();
+            if (worldUi.isSpawned()) {
+                worldUi.updateHandDisplay(this, playerId, state);
+            }
+        }
+        if (player != null && openIfNeeded && !plugin.getConfig().getBoolean("ui.preferWorld", false)) {
             if (player.getOpenInventory().getTopInventory().getHolder() != holder) {
                 player.openInventory(holder.getInventory());
             }
         }
+    }
+
+    private Tile resolveTileByInstance(PlayerState state, int instanceId) {
+        if (state == null) {
+            return null;
+        }
+        for (Tile tile : state.getHand().getConcealed()) {
+            if (tile.getInstanceId() == instanceId) {
+                return tile;
+            }
+        }
+        return null;
     }
 
     private void announceTurn(UUID playerId) {
@@ -1378,7 +1509,12 @@ public class GameTable {
         }
         Player player = plugin.getServer().getPlayer(playerId);
         if (player != null) {
-            player.sendMessage("당신 차례예요. 버릴 타일을 선택해 주세요.");
+            int turnSeconds = plugin.getConfig().getInt("timers.turnSeconds", 20);
+            if (turnSeconds > 0) {
+                player.sendMessage("내 차례예요. " + turnSeconds + "초 안에 버릴 패를 골라 주세요. 시간이 지나면 자동으로 버려요.");
+            } else {
+                player.sendMessage("내 차례예요. 버릴 패를 골라 주세요.");
+            }
             if (engine != null && engine.canDeclareRiichi(playerId)) {
                 player.sendMessage("리치 가능: /mj riichi");
             }
@@ -1388,14 +1524,15 @@ public class GameTable {
             if (engine != null && engine.canTsumo(playerId)) {
                 player.sendMessage("쯔모 가능: /mj tsumo");
             }
-            if (engine != null && dialogsEnabled()) {
-                showActionDialog(player,
+            if (engine != null && dialogs.isEnabled()) {
+                dialogs.showActionDialog(player,
                         engine.canDeclareRiichi(playerId),
                         engine.canTsumo(playerId),
                         engine.canDeclareKan(playerId));
             }
             sendCoachAdvice(playerId);
         }
+        startTurnTimer(playerId);
         updateFuritenWarnings();
         updateWorldUi();
     }
@@ -1446,7 +1583,7 @@ public class GameTable {
 
     private List<String> formatCoachAdvice(CoachAdvice advice) {
         if (advice == null || advice.getSuggestions().isEmpty()) {
-            return List.of("코치: 추천을 만들 수 없어요.");
+            return List.of("코치: 추천 결과가 없어요.");
         }
         StringBuilder sb = new StringBuilder();
         sb.append("코치: 추천 버림패 ");
@@ -1463,8 +1600,8 @@ public class GameTable {
         lines.add(sb.toString());
         if (advice.isRiichiAvailable()) {
             String recommend = advice.isRiichiRecommended() ? "리치" : "유지";
-            lines.add("코치: 리치 기대값 ~" + advice.getRiichiValue()
-                    + " / 유지 기대값 ~" + advice.getKeepValue() + " -> " + recommend);
+            lines.add("코치: 리치 기대값~" + advice.getRiichiValue()
+                    + " / 유지 기대값~" + advice.getKeepValue() + " -> " + recommend);
         } else {
             lines.add("코치: 샹텐을 줄이는 방향이 좋아요.");
         }
@@ -1490,7 +1627,7 @@ public class GameTable {
     private String buildCoachOverlayText(CoachAdvice advice) {
         CoachSuggestion best = advice.getSuggestions().get(0);
         StringBuilder sb = new StringBuilder();
-        sb.append("코치: ")
+        sb.append("코치: 추천 버림패 ")
                 .append(best.getDiscard().toShortString())
                 .append(" (샹텐 ").append(best.getShanten())
                 .append(", 유효패 ").append(best.getUkeire()).append(")");
@@ -1630,17 +1767,72 @@ public class GameTable {
         if (!engine.discard(playerId, tile)) {
             return false;
         }
-        eventLogger.record(new GameEvent(id, playerId, GameEventType.DISCARD, buildTilePayload(tile)));
+        cancelTurnTimer();
+        eventLogger.record(new GameEvent(id, playerId, GameEventType.DISCARD, dialogs.buildTilePayload(tile)));
         lastAction = "DISCARD";
         updateHand(playerId, false);
         broadcast(resolveName(playerId) + " 님이 " + tile.getId().toShortString() + "을(를) 버렸어요.");
         updateWorldUi();
         int seconds = plugin.getConfig().getInt("timers.callWindowSeconds", 5);
-        broadcast("울기 창 열림 (" + seconds + "s). /mj ron|pon|chi|kan 사용");
+
         notifyCallOptions(seconds);
         scheduleCallResolution();
         updateWorldUiActions(seconds);
         return true;
+    }
+
+    private void forceRandomDiscard(UUID playerId) {
+        if (engine == null || playerId == null) {
+            return;
+        }
+        if (engine.getState() != GameState.TURN_DISCARD) {
+            return;
+        }
+        if (!playerId.equals(engine.getActivePlayer())) {
+            return;
+        }
+        if (isBot(playerId)) {
+            return;
+        }
+        PlayerState state = engine.getPlayerState(playerId);
+        if (state == null) {
+            return;
+        }
+        List<Tile> candidates = new ArrayList<>();
+        for (Tile tile : state.getHand().getConcealed()) {
+            if (engine.canDiscard(playerId, tile)) {
+                candidates.add(tile);
+            }
+        }
+        if (candidates.isEmpty()) {
+            Tile fallback = engine.getLastDrawnTile();
+            if (fallback != null && engine.canDiscard(playerId, fallback)) {
+                candidates.add(fallback);
+            }
+        }
+        if (candidates.isEmpty()) {
+            return;
+        }
+        Tile tile = candidates.get(ThreadLocalRandom.current().nextInt(candidates.size()));
+        if (!engine.discard(playerId, tile)) {
+            return;
+        }
+        eventLogger.record(new GameEvent(id, playerId, GameEventType.DISCARD, dialogs.buildTilePayload(tile)));
+        lastAction = "DISCARD";
+        updateHand(playerId, false);
+        Player player = plugin.getServer().getPlayer(playerId);
+        if (player != null) {
+            player.sendMessage("시간이 초과되어 자동으로 버렸어요.");
+            dialogs.closeDialog(player);
+        }
+        broadcast(resolveName(playerId) + " 님이 " + tile.getId().toShortString() + "을(를) 버렸어요.");
+        notifyCoachAfterDiscard(playerId, tile);
+        updateWorldUi();
+        int seconds = plugin.getConfig().getInt("timers.callWindowSeconds", 5);
+
+        notifyCallOptions(seconds);
+        scheduleCallResolution();
+        updateWorldUiActions(seconds);
     }
 
     private void scheduleBotCalls(int callWindowSeconds) {
@@ -1875,14 +2067,7 @@ public class GameTable {
         if (score == null) {
             return;
         }
-        if (!score.getYaku().isEmpty()) {
-            List<String> names = new ArrayList<>();
-            for (wiki.creeper.mahjong.game.Yaku item : score.getYaku()) {
-                names.add(item.getDisplayName());
-            }
-            broadcast("역: " + String.join(", ", names));
-        }
-        broadcast("점수: " + score.summary());
+        broadcast("점수:");
     }
 
     private Map<UUID, Integer> snapshotPoints() {
@@ -1907,230 +2092,6 @@ public class GameTable {
             deltas.put(playerId, end - start);
         }
         return deltas;
-    }
-
-    private void showHandResultDialogs(HandResult result) {
-        if (result == null) {
-            return;
-        }
-        for (UUID playerId : players) {
-            Player player = plugin.getServer().getPlayer(playerId);
-            if (player != null) {
-                showHandResultDialog(player, result);
-            }
-        }
-    }
-
-    private void showHandResultDialog(Player player, HandResult result) {
-        if (player == null || result == null) {
-            return;
-        }
-        List<DialogBody> body = new ArrayList<>();
-        for (Component line : buildHandResultLines(result)) {
-            body.add(DialogBody.plainMessage(line));
-        }
-        List<ActionButton> actions = new ArrayList<>();
-        UUID targetId = player.getUniqueId();
-        boolean canNext = !result.gameOver && engine != null && engine.getState() == GameState.HAND_END
-                && players.size() == MAX_PLAYERS;
-        if (canNext) {
-            actions.add(ActionButton.create(
-                    Component.text("다음 핸드", NamedTextColor.GREEN),
-                    Component.text("다음 핸드를 시작해요", NamedTextColor.DARK_GRAY),
-                    100,
-                    dialogAction(targetId, this::requestNextHand)
-            ));
-        }
-        if (result.gameOver && roomMode) {
-            actions.add(ActionButton.create(
-                    Component.text("로비", NamedTextColor.AQUA),
-                    Component.text("로비로 돌아가기", NamedTextColor.DARK_GRAY),
-                    80,
-                    dialogAction(targetId, this::showRoomLobby)
-            ));
-        }
-        actions.add(ActionButton.create(
-                Component.text("닫기", NamedTextColor.DARK_GRAY),
-                Component.text("창 닫기", NamedTextColor.DARK_GRAY),
-                10,
-                null
-        ));
-        String title = result.gameOver ? "게임 결과" : "핸드 결과";
-        Dialog dialog = Dialog.create(builder -> builder.empty()
-                .base(DialogBase.builder(Component.text(title, NamedTextColor.GOLD))
-                        .body(body)
-                        .build())
-                .type(DialogType.multiAction(actions).build())
-        );
-        player.showDialog(dialog);
-    }
-
-    private List<Component> buildHandResultLines(HandResult result) {
-        List<Component> lines = new ArrayList<>();
-        if (result.winnerId != null) {
-            String winnerName = resolveName(result.winnerId);
-            String winType = result.tsumo ? "쯔모" : "론";
-            lines.add(Component.text("승자: " + winnerName + " (" + winType + ")", NamedTextColor.GOLD));
-            if (!result.tsumo && result.discarderId != null) {
-                lines.add(Component.text("방총자: " + resolveName(result.discarderId), NamedTextColor.GRAY));
-            }
-            if (result.score != null) {
-                lines.add(Component.text("점수: " + result.score.summary(), NamedTextColor.WHITE));
-                if (!result.score.getYaku().isEmpty()) {
-                    List<String> names = new ArrayList<>();
-                    for (wiki.creeper.mahjong.game.Yaku item : result.score.getYaku()) {
-                        names.add(item.getDisplayName());
-                    }
-                    lines.add(Component.text("역: " + String.join(", ", names), NamedTextColor.AQUA));
-                }
-                String paymentLine = buildPaymentLine(result);
-                if (!paymentLine.isEmpty()) {
-                    lines.add(Component.text(paymentLine, NamedTextColor.GRAY));
-                }
-            }
-            if (result.riichiPotApplied > 0) {
-                int riichiStick = plugin.getConfig().getInt("scoring.riichiStick", 1000);
-                int bonus = result.riichiPotApplied * riichiStick;
-                lines.add(Component.text("공탁: " + result.riichiPotApplied + " (" + bonus + " 점)", NamedTextColor.GRAY));
-            }
-        } else {
-            lines.add(Component.text("유국: 류국", NamedTextColor.GOLD));
-            if (result.tenpaiPlayers == null || result.tenpaiPlayers.isEmpty()) {
-                lines.add(Component.text("텐파이: 없음", NamedTextColor.GRAY));
-            } else {
-                List<String> names = new ArrayList<>();
-                for (UUID playerId : result.tenpaiPlayers) {
-                    names.add(resolveName(playerId));
-                }
-                lines.add(Component.text("텐파이: " + String.join(", ", names), NamedTextColor.GRAY));
-            }
-        }
-        lines.add(Component.text("점수:", NamedTextColor.YELLOW));
-        for (UUID playerId : players) {
-            int delta = result.pointDeltas.getOrDefault(playerId, 0);
-            int points = result.pointsAfter.getOrDefault(playerId, 0);
-            NamedTextColor color;
-            if (delta > 0) {
-                color = NamedTextColor.GREEN;
-            } else if (delta < 0) {
-                color = NamedTextColor.RED;
-            } else {
-                color = NamedTextColor.GRAY;
-            }
-            lines.add(Component.text("- " + resolveName(playerId) + ": " + formatDelta(delta) + " => " + points, color));
-        }
-        if (result.gameOver) {
-            lines.add(Component.text("게임이 종료됐어요.", NamedTextColor.RED));
-        } else if (result.nextRound != null) {
-            String nextLine = formatNextRoundLine(result.nextRound);
-            if (!nextLine.isEmpty()) {
-                lines.add(Component.text(nextLine, NamedTextColor.GRAY));
-            }
-        }
-        return lines;
-    }
-
-    private void updateWorldHandResult(HandResult result) {
-        if (!worldUi.isSpawned()) {
-            return;
-        }
-        if (result == null) {
-            worldUi.clearHandResult();
-            return;
-        }
-        worldUi.updateHandResult(buildHandResultTextLines(result));
-    }
-
-    private List<String> buildHandResultTextLines(HandResult result) {
-        List<String> lines = new ArrayList<>();
-        if (result.winnerId != null) {
-            String winnerName = resolveName(result.winnerId);
-            String winType = result.tsumo ? "쯔모" : "론";
-            lines.add("승자: " + winnerName + " (" + winType + ")");
-            if (!result.tsumo && result.discarderId != null) {
-                lines.add("방총자: " + resolveName(result.discarderId));
-            }
-            if (result.score != null) {
-                lines.add("점수: " + result.score.summary());
-                if (!result.score.getYaku().isEmpty()) {
-                    List<String> names = new ArrayList<>();
-                    for (wiki.creeper.mahjong.game.Yaku item : result.score.getYaku()) {
-                        names.add(item.getDisplayName());
-                    }
-                    lines.add("역: " + String.join(", ", names));
-                }
-                String paymentLine = buildPaymentLine(result);
-                if (!paymentLine.isEmpty()) {
-                    lines.add(paymentLine);
-                }
-            }
-            if (result.riichiPotApplied > 0) {
-                int riichiStick = plugin.getConfig().getInt("scoring.riichiStick", 1000);
-                int bonus = result.riichiPotApplied * riichiStick;
-                lines.add("공탁: " + result.riichiPotApplied + " (" + bonus + " 점)");
-            }
-        } else {
-            lines.add("유국: 류국");
-            if (result.tenpaiPlayers == null || result.tenpaiPlayers.isEmpty()) {
-                lines.add("텐파이: 없음");
-            } else {
-                List<String> names = new ArrayList<>();
-                for (UUID playerId : result.tenpaiPlayers) {
-                    names.add(resolveName(playerId));
-                }
-                lines.add("텐파이: " + String.join(", ", names));
-            }
-        }
-        lines.add("점수:");
-        for (UUID playerId : players) {
-            int delta = result.pointDeltas.getOrDefault(playerId, 0);
-            int points = result.pointsAfter.getOrDefault(playerId, 0);
-            lines.add("- " + resolveName(playerId) + ": " + formatDelta(delta) + " => " + points);
-        }
-        if (result.gameOver) {
-            lines.add("게임이 종료됐어요.");
-        } else if (result.nextRound != null) {
-            String nextLine = formatNextRoundLine(result.nextRound);
-            if (!nextLine.isEmpty()) {
-                lines.add(nextLine);
-            }
-        }
-        return lines;
-    }
-
-    private String buildPaymentLine(HandResult result) {
-        if (result == null || result.score == null) {
-            return "";
-        }
-        int honba = result.honbaApplied;
-        int honbaRonBonus = plugin.getConfig().getInt("scoring.honbaRonBonus", 300);
-        int honbaTsumoBonus = plugin.getConfig().getInt("scoring.honbaTsumoBonus", 100);
-        String suffix = honba > 0 ? " (honba " + honba + ")" : "";
-        if (result.tsumo) {
-            int dealerPay = result.score.getTsumoFromDealer() + (honba * honbaTsumoBonus);
-            int otherPay = result.score.getTsumoFromOthers() + (honba * honbaTsumoBonus);
-            if (result.score.isDealer()) {
-                return "Payments: each " + dealerPay + suffix;
-            }
-            return "Payments: dealer " + dealerPay + ", others " + otherPay + suffix;
-        }
-        int ronPay = result.score.getRonPayment() + (honba * honbaRonBonus);
-        return "Payment: " + ronPay + suffix;
-    }
-
-    private String formatNextRoundLine(RoundState round) {
-        if (round == null) {
-            return "";
-        }
-        return "Next: " + round.getRoundWind() + " " + round.getKyoku()
-                + " (Dealer " + round.getDealerWind() + ", Honba " + round.getHonba() + ")";
-    }
-
-    private String formatDelta(int delta) {
-        if (delta > 0) {
-            return "+" + delta;
-        }
-        return Integer.toString(delta);
     }
 
     private void logGameStart(long seed) {
@@ -2182,7 +2143,7 @@ public class GameTable {
         if (playerId == null || tile == null) {
             return;
         }
-        String payload = buildDrawPayload(tile, engine.isLastDrawRinshan());
+        String payload = dialogs.buildDrawPayload(tile, engine.isLastDrawRinshan());
         eventLogger.record(new GameEvent(id, playerId, GameEventType.DRAW, payload));
         lastAction = "DRAW";
     }
@@ -2273,9 +2234,14 @@ public class GameTable {
         Tile lastDiscard = engine.getLastDiscard();
         TileId lastDiscardId = lastDiscard == null ? null : TileCounter.normalize(lastDiscard.getId());
         boolean callWindow = engine.isCallWindowActive();
-        int remainingSeconds = callWindow
-                ? plugin.getConfig().getInt("timers.callWindowSeconds", 5)
-                : -1;
+        int remainingSeconds = -1;
+        if (callWindow) {
+            remainingSeconds = callSecondsRemaining >= 0
+                    ? callSecondsRemaining
+                    : plugin.getConfig().getInt("timers.callWindowSeconds", 5);
+        } else if (engine.getState() == GameState.TURN_DISCARD) {
+            remainingSeconds = turnSecondsRemaining;
+        }
         return new TurnContext(lastAction, engine.getState(), lastDiscardId, engine.getLastDiscarder(),
                 callWindow, remainingSeconds);
     }
@@ -2300,7 +2266,7 @@ public class GameTable {
 
     private void broadcastTenpai(List<UUID> tenpaiPlayers) {
         if (tenpaiPlayers == null || tenpaiPlayers.isEmpty()) {
-            broadcast("텐파이: 없음");
+            broadcast("텐파이 없음");
             return;
         }
         List<String> names = new ArrayList<>();
@@ -2393,7 +2359,6 @@ public class GameTable {
         if (engine == null || engine.getState() != GameState.CALL_WINDOW) {     
             return;
         }
-        callDialogPlayers.clear();
         for (UUID playerId : players) {
             if (playerId.equals(engine.getLastDiscarder())) {
                 continue;
@@ -2407,20 +2372,16 @@ public class GameTable {
                 continue;
             }
             List<String> options = resolveCallOptions(playerId, player);
-            if (!options.isEmpty()) {
-                player.sendMessage("가능한 울기: " + String.join(", ", options));
-            }
-            if (dialogsEnabled()) {
-                showCallDialog(player, choices, callWindowSeconds);
-                callDialogPlayers.add(playerId);
-            } else {
-                showCallPopup(player, options, callWindowSeconds);
-            }
+            dialogs.showCallPopup(player, options, callWindowSeconds);
         }
         scheduleBotCalls(callWindowSeconds);
     }
 
-    private List<String> resolveCallOptions(UUID playerId, Player player) {     
+    private String callName(CallType type) {
+        return dialogs.callName(type);
+    }
+
+    List<String> resolveCallOptions(UUID playerId, Player player) {
         List<String> options = new ArrayList<>();
         if (engine.canRon(playerId)) {
             options.add(callName(CallType.RON));
@@ -2434,8 +2395,8 @@ public class GameTable {
         int chiCount = engine.getChiOptionCount(playerId);
         if (chiCount > 0) {
             options.add(callName(CallType.CHI));
-            if (chiCount > 1 && !dialogsEnabled()) {
-                player.sendMessage("여러 치 선택지가 있어요. /mj chi <1-" + chiCount + ">으로 선택해 주세요.");
+            if (chiCount > 1 && !dialogs.isEnabled()) {
+                player.sendMessage("치 선택지가 여러 개예요. /mj chi <1-" + chiCount + ">로 선택해 주세요.");
             }
         }
         return options;
@@ -2473,771 +2434,6 @@ public class GameTable {
         return options;
     }
 
-    private void showCallDialog(Player player, List<CallOption> options, int callWindowSeconds) {
-        if (player == null || options == null || options.isEmpty()) {
-            return;
-        }
-        Tile lastDiscard = engine == null ? null : engine.getLastDiscard();
-        List<DialogBody> body = new ArrayList<>();
-        String lastText = lastDiscard == null ? "-" : lastDiscard.getId().toShortString();
-        body.add(DialogBody.plainMessage(Component.text("Last discard: " + lastText, NamedTextColor.GRAY)));
-        if (callWindowSeconds >= 0) {
-            body.add(DialogBody.plainMessage(Component.text("Remaining: " + callWindowSeconds + "s", NamedTextColor.DARK_GRAY)));
-        }
-        Dialog dialog = Dialog.create(builder -> builder.empty()
-                .base(DialogBase.builder(Component.text("Call Window", NamedTextColor.GOLD))
-                        .body(body)
-                        .canCloseWithEscape(true)
-                        .build())
-                .type(DialogType.multiAction(buildCallButtons(player, options, lastDiscard, true)).build())
-        );
-        player.showDialog(dialog);
-    }
-
-    private void showChiDialog(Player player, List<CallOption> options) {       
-        if (player == null || options == null || options.isEmpty()) {
-            return;
-        }
-        Tile lastDiscard = engine == null ? null : engine.getLastDiscard();     
-        String lastText = lastDiscard == null ? "-" : lastDiscard.getId().toShortString();
-        List<DialogBody> body = new ArrayList<>();
-        body.add(DialogBody.plainMessage(Component.text("Select a chi for " + lastText + ".", NamedTextColor.GRAY)));
-        Dialog dialog = Dialog.create(builder -> builder.empty()
-                .base(DialogBase.builder(Component.text("Chi Options", NamedTextColor.GREEN))
-                        .body(body)
-                        .canCloseWithEscape(true)
-                        .build())
-                .type(DialogType.multiAction(buildCallButtons(player, options, lastDiscard, true)).build())
-        );
-        player.showDialog(dialog);
-    }
-
-    private void showSelfKanDialog(Player player, List<KanOption> options) {
-        if (player == null || options == null || options.isEmpty()) {
-            return;
-        }
-        List<DialogBody> body = new ArrayList<>();
-        body.add(DialogBody.plainMessage(Component.text(
-                "Select a kan option.", NamedTextColor.GRAY)));
-        UUID targetId = player.getUniqueId();
-        List<ActionButton> actions = new ArrayList<>();
-        for (int i = 0; i < options.size(); i++) {
-            KanOption option = options.get(i);
-            int index = i + 1;
-            String label = formatKanOptionLabel(option, index);
-            actions.add(ActionButton.create(
-                    Component.text(label, NamedTextColor.GOLD),
-                    Component.text("Declare kan", NamedTextColor.GRAY),
-                    180,
-                    dialogAction(targetId, clicker -> requestKan(clicker, index))
-            ));
-        }
-        actions.add(ActionButton.create(
-                Component.text("Cancel", NamedTextColor.DARK_GRAY),
-                Component.text("Close dialog", NamedTextColor.GRAY),
-                120,
-                null
-        ));
-        Dialog dialog = Dialog.create(builder -> builder.empty()
-                .base(DialogBase.builder(Component.text("Kan Options", NamedTextColor.GOLD))
-                        .body(body)
-                        .canCloseWithEscape(true)
-                        .build())
-                .type(DialogType.multiAction(actions).build())
-        );
-        player.showDialog(dialog);
-    }
-
-    private void showRoomLobbyDialog(Player player) {
-        if (player == null) {
-            return;
-        }
-        List<DialogBody> body = new ArrayList<>();
-        String code = roomCode == null ? "-" : roomCode;
-        String hostName = hostId == null ? "-" : resolveName(hostId);
-        body.add(DialogBody.plainMessage(Component.text("Room Code: " + code, NamedTextColor.GRAY)));
-        body.add(DialogBody.plainMessage(Component.text("Host: " + hostName, NamedTextColor.GRAY)));
-        body.add(DialogBody.plainMessage(Component.text("Players: " + players.size() + "/" + MAX_PLAYERS, NamedTextColor.GRAY)));
-        body.add(DialogBody.plainMessage(Component.text("Seats: " + seatAssignments.size() + "/" + MAX_PLAYERS, NamedTextColor.GRAY)));
-        body.add(DialogBody.plainMessage(Component.text("Ready: " + getReadyCount() + "/" + players.size(), NamedTextColor.GRAY)));
-        body.add(DialogBody.plainMessage(Component.text("Rules: " + describeRules(getRulesSnapshot()), NamedTextColor.GOLD)));
-        for (SeatWind seat : SeatWind.values()) {
-            UUID occupant = seatAssignments.get(seat);
-            String seatName = seatLabel(seat);
-            String occupantName = occupant == null ? "Empty" : resolveName(occupant);
-            NamedTextColor color = occupant == null ? NamedTextColor.DARK_GRAY : NamedTextColor.WHITE;
-            body.add(DialogBody.plainMessage(Component.text(seatName + ": " + occupantName, color)));
-        }
-        for (UUID playerId : players) {
-            boolean ready = readyPlayers.contains(playerId);
-            boolean bot = isBot(playerId);
-            NamedTextColor color = bot ? NamedTextColor.AQUA : (ready ? NamedTextColor.GREEN : NamedTextColor.DARK_GRAY);
-            String state = bot ? "BOT" : (ready ? "READY" : "WAIT");
-            String seatName = seatLabel(playerSeats.get(playerId));
-            String coachTag = coachPlayers.contains(playerId) ? "/COACH" : "";
-            body.add(DialogBody.plainMessage(Component.text("- " + resolveName(playerId) + " [" + seatName + "/" + state + coachTag + "]", color)));
-        }
-        List<ActionButton> actions = new ArrayList<>();
-        UUID targetId = player.getUniqueId();
-        for (SeatWind seat : SeatWind.values()) {
-            UUID occupant = seatAssignments.get(seat);
-            boolean mine = occupant != null && occupant.equals(targetId);
-            boolean available = occupant == null || mine;
-            NamedTextColor color = mine ? NamedTextColor.GREEN : (occupant == null ? NamedTextColor.YELLOW : NamedTextColor.DARK_GRAY);
-            String label = "Seat " + seatLabel(seat) + (mine ? " (You)" : "");
-            DialogAction action = available
-                    ? dialogAction(targetId, clicker -> {
-                        assignSeat(clicker, seat);
-                        showRoomLobbyDialog(clicker);
-                    })
-                    : null;
-            actions.add(ActionButton.create(
-                    Component.text(label, color),
-                    Component.text(occupant == null ? "Choose seat" : (mine ? "Leave seat" : "Seat taken"), NamedTextColor.GRAY),
-                    170,
-                    action
-            ));
-        }
-        SeatWind mySeat = playerSeats.get(targetId);
-        if (mySeat != null) {
-            actions.add(ActionButton.create(
-                    Component.text("LEAVE SEAT", NamedTextColor.RED),
-                    Component.text("Clear seat", NamedTextColor.GRAY),
-                    160,
-                    dialogAction(targetId, clicker -> {
-                        clearSeat(targetId, true);
-                        showRoomLobbyDialog(clicker);
-                    })
-            ));
-        }
-        boolean isReady = readyPlayers.contains(targetId);
-        boolean canReady = playerSeats.containsKey(targetId);
-        actions.add(ActionButton.create(
-                Component.text(isReady ? "UNREADY" : "READY", isReady ? NamedTextColor.RED : NamedTextColor.GREEN),
-                Component.text(canReady ? "Toggle ready" : "Pick a seat first", NamedTextColor.GRAY),
-                160,
-                canReady ? dialogAction(targetId, clicker -> {
-                    toggleReady(clicker);
-                    showRoomLobbyDialog(clicker);
-                }) : null
-        ));
-        boolean coachAllowed = isCoachAllowed();
-        boolean coachOn = coachPlayers.contains(targetId);
-        String coachLabel = coachAllowed ? (coachOn ? "COACH ON" : "COACH OFF") : "COACH LOCKED";
-        NamedTextColor coachColor = coachAllowed ? (coachOn ? NamedTextColor.GREEN : NamedTextColor.DARK_GRAY) : NamedTextColor.RED;
-        String coachHint = coachAllowed ? "Toggle coach" : "Coach disabled in this room";
-        DialogAction coachAction = coachAllowed
-                ? dialogAction(targetId, clicker -> {
-                    setCoach(clicker, !coachOn);
-                    showRoomLobbyDialog(clicker);
-                })
-                : null;
-        actions.add(ActionButton.create(
-                Component.text(coachLabel, coachColor),
-                Component.text(coachHint, NamedTextColor.GRAY),
-                160,
-                coachAction
-        ));
-        if (isHost(targetId)) {
-            actions.add(ActionButton.create(
-                    Component.text("RULES", NamedTextColor.AQUA),
-                    Component.text("Edit room rules", NamedTextColor.GRAY),
-                    160,
-                    dialogAction(targetId, clicker -> showRoomRules(clicker))
-            ));
-            actions.add(ActionButton.create(
-                    Component.text("BOTS", NamedTextColor.LIGHT_PURPLE),
-                    Component.text("Manage bots", NamedTextColor.GRAY),
-                    160,
-                    dialogAction(targetId, clicker -> showBotDialog(clicker))
-            ));
-            boolean canStart = getState() == GameState.LOBBY && players.size() == MAX_PLAYERS && areAllReady();
-            actions.add(ActionButton.create(
-                    Component.text(canStart ? "START" : "START (need all ready)", NamedTextColor.GOLD),
-                    Component.text("Start the game", NamedTextColor.GRAY),
-                    200,
-                    canStart ? dialogAction(targetId, clicker -> requestStart(clicker)) : null
-            ));
-        }
-        actions.add(ActionButton.create(
-                Component.text("REFRESH", NamedTextColor.GRAY),
-                Component.text("Refresh lobby", NamedTextColor.GRAY),
-                140,
-                dialogAction(targetId, clicker -> showRoomLobbyDialog(clicker))
-        ));
-        actions.add(ActionButton.create(
-                Component.text("Close", NamedTextColor.DARK_GRAY),
-                Component.text("Close dialog", NamedTextColor.GRAY),
-                120,
-                null
-        ));
-        Dialog dialog = Dialog.create(builder -> builder.empty()
-                .base(DialogBase.builder(Component.text("Room Lobby", NamedTextColor.AQUA))
-                        .body(body)
-                        .canCloseWithEscape(true)
-                        .build())
-                .type(DialogType.multiAction(actions).build())
-        );
-        player.showDialog(dialog);
-    }
-
-    private void showRoomRulesDialog(Player player) {
-        if (player == null) {
-            return;
-        }
-        GameRules current = getRulesSnapshot();
-        List<DialogBody> body = new ArrayList<>();
-        String code = roomCode == null ? "-" : roomCode;
-        body.add(DialogBody.plainMessage(Component.text("Room Code: " + code, NamedTextColor.GRAY)));
-        body.add(DialogBody.plainMessage(Component.text("Rules", NamedTextColor.GOLD)));
-        body.add(DialogBody.plainMessage(Component.text(formatRuleLine("Red Dora", current.isRedDoraEnabled()), NamedTextColor.WHITE)));
-        body.add(DialogBody.plainMessage(Component.text(formatRuleLine("Open Tanyao", current.isOpenTanyaoEnabled()), NamedTextColor.WHITE)));
-        body.add(DialogBody.plainMessage(Component.text(formatRuleLine("Ippatsu", current.isIppatsuEnabled()), NamedTextColor.WHITE)));
-        body.add(DialogBody.plainMessage(Component.text(formatRuleLine("Ura Dora", current.isUraDoraEnabled()), NamedTextColor.WHITE)));
-        body.add(DialogBody.plainMessage(Component.text("Options", NamedTextColor.GOLD)));
-        body.add(DialogBody.plainMessage(Component.text(formatRuleLine("Bots", botsEnabled), NamedTextColor.WHITE)));
-        body.add(DialogBody.plainMessage(Component.text(formatRuleLine("Coach", coachEnabled), NamedTextColor.WHITE)));
-        body.add(DialogBody.plainMessage(Component.text(formatRuleLine("Coach Rank Lock", coachRankDisabled), NamedTextColor.WHITE)));
-
-        List<ActionButton> actions = new ArrayList<>();
-        UUID targetId = player.getUniqueId();
-        actions.add(buildRuleToggleButton(targetId, "Red Dora", current.isRedDoraEnabled(), "redDora"));
-        actions.add(buildRuleToggleButton(targetId, "Open Tanyao", current.isOpenTanyaoEnabled(), "openTanyao"));
-        actions.add(buildRuleToggleButton(targetId, "Ippatsu", current.isIppatsuEnabled(), "ippatsu"));
-        actions.add(buildRuleToggleButton(targetId, "Ura Dora", current.isUraDoraEnabled(), "uraDora"));
-        actions.add(buildRuleToggleButton(targetId, "Bots", botsEnabled, "bots"));
-        actions.add(buildRuleToggleButton(targetId, "Coach", coachEnabled, "coach"));
-        actions.add(buildRuleToggleButton(targetId, "Coach Rank", coachRankDisabled, "coachRank"));
-        actions.add(buildPresetButton(targetId, "Preset: Default", "default"));
-        actions.add(buildPresetButton(targetId, "Preset: Kuitan", "kuitan"));
-        actions.add(buildPresetButton(targetId, "Preset: Classic", "classic"));
-        actions.add(ActionButton.create(
-                Component.text("Lobby", NamedTextColor.GRAY),
-                Component.text("Back to lobby", NamedTextColor.GRAY),
-                120,
-                dialogAction(targetId, clicker -> showRoomLobbyDialog(clicker))
-        ));
-        actions.add(ActionButton.create(
-                Component.text("Close", NamedTextColor.DARK_GRAY),
-                Component.text("Close dialog", NamedTextColor.GRAY),
-                120,
-                null
-        ));
-
-        Dialog dialog = Dialog.create(builder -> builder.empty()
-                .base(DialogBase.builder(Component.text("Room Rules", NamedTextColor.AQUA))
-                        .body(body)
-                        .canCloseWithEscape(true)
-                        .build())
-                .type(DialogType.multiAction(actions).build())
-        );
-        player.showDialog(dialog);
-    }
-
-    private void showBotDialog(Player player) {
-        if (player == null) {
-            return;
-        }
-        if (!roomMode) {
-            player.sendMessage("이 테이블은 방 모드가 아니에요.");
-            return;
-        }
-        if (!isHost(player.getUniqueId())) {
-            player.sendMessage("방장만 봇을 관리할 수 있어요.");
-            return;
-        }
-        if (getState() != GameState.LOBBY) {
-            player.sendMessage("봇 관리는 로비에서만 가능해요.");
-            return;
-        }
-        if (!dialogsEnabled()) {
-            player.sendMessage("봇 관리는 /mj bot add|remove <난이도>를 사용해 주세요.");
-            return;
-        }
-        List<DialogBody> body = new ArrayList<>();
-        body.add(DialogBody.plainMessage(Component.text("봇: " + onOff(botsEnabled), NamedTextColor.GRAY)));
-        body.add(DialogBody.plainMessage(Component.text("인원: " + players.size() + "/" + MAX_PLAYERS, NamedTextColor.GRAY)));
-        if (bots.isEmpty()) {
-            body.add(DialogBody.plainMessage(Component.text("봇: 없음", NamedTextColor.DARK_GRAY)));
-        } else {
-            body.add(DialogBody.plainMessage(Component.text("봇 목록", NamedTextColor.GOLD)));
-            for (BotProfile profile : bots.values()) {
-                body.add(DialogBody.plainMessage(Component.text("- " + profile.getName() + " (" + profile.getDifficulty() + ")", NamedTextColor.WHITE)));
-            }
-        }
-        List<ActionButton> actions = new ArrayList<>();
-        UUID targetId = player.getUniqueId();
-        boolean canAdd = botsEnabled && players.size() < MAX_PLAYERS;
-        actions.add(buildBotActionButton(targetId, "ADD BEGINNER", BotDifficulty.BEGINNER, canAdd));
-        actions.add(buildBotActionButton(targetId, "ADD NORMAL", BotDifficulty.NORMAL, canAdd));
-        actions.add(buildBotActionButton(targetId, "ADD HARD", BotDifficulty.HARD, canAdd));
-        actions.add(buildBotRemoveButton(targetId, "REMOVE BEGINNER", BotDifficulty.BEGINNER));
-        actions.add(buildBotRemoveButton(targetId, "REMOVE NORMAL", BotDifficulty.NORMAL));
-        actions.add(buildBotRemoveButton(targetId, "REMOVE HARD", BotDifficulty.HARD));
-        actions.add(ActionButton.create(
-                Component.text("Lobby", NamedTextColor.GRAY),
-                Component.text("Back to lobby", NamedTextColor.GRAY),
-                120,
-                dialogAction(targetId, clicker -> showRoomLobbyDialog(clicker))
-        ));
-        actions.add(ActionButton.create(
-                Component.text("Close", NamedTextColor.DARK_GRAY),
-                Component.text("Close dialog", NamedTextColor.GRAY),
-                120,
-                null
-        ));
-        Dialog dialog = Dialog.create(builder -> builder.empty()
-                .base(DialogBase.builder(Component.text("Bot Manager", NamedTextColor.LIGHT_PURPLE))
-                        .body(body)
-                        .canCloseWithEscape(true)
-                        .build())
-                .type(DialogType.multiAction(actions).build())
-        );
-        player.showDialog(dialog);
-    }
-
-    private ActionButton buildBotActionButton(UUID targetId, String label, BotDifficulty difficulty, boolean enabled) {
-        DialogAction action = enabled ? dialogAction(targetId, clicker -> {
-            addBot(difficulty);
-            showBotDialog(clicker);
-        }) : null;
-        NamedTextColor color = enabled ? NamedTextColor.GREEN : NamedTextColor.DARK_GRAY;
-        String hint = enabled ? "Add bot" : "Bots disabled or full";
-        return ActionButton.create(Component.text(label, color), Component.text(hint, NamedTextColor.GRAY), 160, action);
-    }
-
-    private ActionButton buildBotRemoveButton(UUID targetId, String label, BotDifficulty difficulty) {
-        boolean enabled = hasBotDifficulty(difficulty);
-        DialogAction action = enabled ? dialogAction(targetId, clicker -> {
-            removeBot(difficulty);
-            showBotDialog(clicker);
-        }) : null;
-        NamedTextColor color = enabled ? NamedTextColor.RED : NamedTextColor.DARK_GRAY;
-        String hint = enabled ? "Remove bot" : "No bot";
-        return ActionButton.create(Component.text(label, color), Component.text(hint, NamedTextColor.GRAY), 160, action);
-    }
-
-    private ActionButton buildRuleToggleButton(UUID targetId, String label, boolean enabled, String ruleKey) {
-        NamedTextColor color = enabled ? NamedTextColor.GREEN : NamedTextColor.RED;
-        String state = enabled ? "ON" : "OFF";
-        DialogAction action = dialogAction(targetId, clicker -> {
-            updateRule(ruleKey, null);
-            showRoomRulesDialog(clicker);
-        });
-        return ActionButton.create(
-                Component.text(label + " " + state, color),
-                Component.text("Toggle " + label, NamedTextColor.GRAY),
-                180,
-                action
-        );
-    }
-
-    private ActionButton buildPresetButton(UUID targetId, String label, String presetKey) {
-        DialogAction action = dialogAction(targetId, clicker -> {
-            applyPreset(presetKey);
-            showRoomRulesDialog(clicker);
-        });
-        return ActionButton.create(
-                Component.text(label, NamedTextColor.GOLD),
-                Component.text("Apply preset", NamedTextColor.GRAY),
-                180,
-                action
-        );
-    }
-
-    private void showActionDialog(Player player, boolean canRiichi, boolean canTsumo, boolean canKan) {
-        if (player == null || (!canRiichi && !canTsumo && !canKan)) {
-            return;
-        }
-        List<ActionButton> actions = new ArrayList<>();
-        UUID targetId = player.getUniqueId();
-        if (canRiichi) {
-            actions.add(ActionButton.create(
-                    Component.text("RIICHI", NamedTextColor.AQUA),
-                    Component.text("Declare riichi", NamedTextColor.GRAY),
-                    140,
-                    dialogAction(targetId, clicker -> requestRiichi(clicker))
-            ));
-        }
-        if (canKan) {
-            actions.add(ActionButton.create(
-                    Component.text("KAN", NamedTextColor.GOLD),
-                    Component.text("Declare kan", NamedTextColor.GRAY),
-                    140,
-                    dialogAction(targetId, clicker -> requestKan(clicker))
-            ));
-        }
-        if (canTsumo) {
-            actions.add(ActionButton.create(
-                    Component.text("TSUMO", NamedTextColor.LIGHT_PURPLE),
-                    Component.text("Win by tsumo", NamedTextColor.GRAY),
-                    140,
-                    dialogAction(targetId, clicker -> requestTsumo(clicker))
-            ));
-        }
-        Dialog dialog = Dialog.create(builder -> builder.empty()
-                .base(DialogBase.builder(Component.text("Actions", NamedTextColor.AQUA))
-                        .body(List.of(DialogBody.plainMessage(Component.text(
-                                "Choose an action or close to discard.", NamedTextColor.GRAY))))
-                        .canCloseWithEscape(true)
-                        .build())
-                .type(DialogType.multiAction(actions).build())
-        );
-        player.showDialog(dialog);
-    }
-
-    private void showDiscardConfirmDialog(Player player, Tile tile, ItemStack item) {
-        if (player == null || tile == null) {
-            return;
-        }
-        ItemStack displayItem = item == null ? null : item.clone();
-        ItemStack payload = displayItem == null ? item : displayItem;
-        if (payload == null) {
-            return;
-        }
-        List<DialogBody> body = new ArrayList<>();
-        body.add(DialogBody.plainMessage(Component.text(
-                "Discard " + tile.getId().toShortString() + "?", NamedTextColor.RED)));
-        if (displayItem != null) {
-            body.add(DialogBody.item(displayItem).build());
-        }
-        UUID targetId = player.getUniqueId();
-        ActionButton yesButton = ActionButton.create(
-                Component.text("Discard", NamedTextColor.RED),
-                Component.text("Confirm discard", NamedTextColor.GRAY),
-                140,
-                dialogAction(targetId, clicker -> handleDiscard(clicker, payload))
-        );
-        ActionButton noButton = ActionButton.create(
-                Component.text("Cancel", NamedTextColor.GRAY),
-                Component.text("Keep tile", NamedTextColor.DARK_GRAY),
-                140,
-                null
-        );
-        Dialog dialog = Dialog.create(builder -> builder.empty()
-                .base(DialogBase.builder(Component.text("Confirm Discard", NamedTextColor.RED))
-                        .body(body)
-                        .canCloseWithEscape(true)
-                        .build())
-                .type(DialogType.confirmation(yesButton, noButton))
-        );
-        player.showDialog(dialog);
-    }
-
-    private List<ActionButton> buildCallButtons(Player player, List<CallOption> options, Tile lastDiscard, boolean includePass) {
-        List<ActionButton> actions = new ArrayList<>();
-        UUID targetId = player.getUniqueId();
-        for (CallOption option : options) {
-            String label = describeCallOption(option, lastDiscard);
-            DialogAction action = dialogAction(targetId, clicker -> handleCallOption(option, clicker));
-            actions.add(ActionButton.create(
-                    Component.text(label, callColor(option.getType())),
-                    Component.text("울기 " + callName(option.getType()), NamedTextColor.GRAY),
-                    150,
-                    action
-            ));
-        }
-        if (includePass) {
-            actions.add(ActionButton.create(
-                    Component.text("PASS", NamedTextColor.DARK_GRAY),
-                    Component.text("Close dialog", NamedTextColor.DARK_GRAY),
-                    110,
-                    null
-            ));
-        }
-        return actions;
-    }
-
-    private void handleCallOption(CallOption option, Player player) {
-        switch (option.getType()) {
-            case RON:
-                requestRon(player);
-                break;
-            case PON:
-                requestPon(player);
-                break;
-            case KAN:
-                requestKan(player);
-                break;
-            case CHI:
-                requestChi(player, option.getChiIndex());
-                break;
-            default:
-                break;
-        }
-    }
-
-    private DialogAction dialogAction(UUID targetId, Consumer<Player> action) {
-        return DialogAction.customClick((view, audience) -> {
-            if (!(audience instanceof Player player)) {
-                return;
-            }
-            if (!player.getUniqueId().equals(targetId)) {
-                return;
-            }
-            action.accept(player);
-        }, ClickCallback.Options.builder().uses(1).build());
-    }
-
-    private String describeCallOption(CallOption option, Tile lastDiscard) {
-        String tiles = formatTilesForCall(option, lastDiscard);
-        if (tiles.isEmpty()) {
-            return callName(option.getType());
-        }
-        return callName(option.getType()) + " " + tiles;
-    }
-
-    private String formatKanOptionLabel(KanOption option, int index) {
-        String tile = option.getTileId().toShortString();
-        String type = option.getType() == MeldType.KAN_CLOSED ? "CLOSED" : "ADDED";
-        return index + ". " + type + " " + tile;
-    }
-
-    private String describeSelfKan(KanOption option) {
-        String tile = option.getTileId().toShortString();
-        String type = option.getType() == MeldType.KAN_CLOSED ? "closed" : "added";
-        return type + " kan (" + tile + ")";
-    }
-
-    private String formatTilesForCall(CallOption option, Tile lastDiscard) {
-        List<TileId> ids = new ArrayList<>();
-        for (Tile tile : option.getTiles()) {
-            ids.add(tile.getId());
-        }
-        if (lastDiscard != null && option.getType() != CallType.RON) {
-            ids.add(lastDiscard.getId());
-        } else if (lastDiscard != null && option.getType() == CallType.RON && ids.isEmpty()) {
-            ids.add(lastDiscard.getId());
-        }
-        if (ids.isEmpty()) {
-            return "";
-        }
-        ids.sort(Comparator.comparingInt(this::tileSortKey));
-        StringBuilder sb = new StringBuilder();
-        for (int i = 0; i < ids.size(); i++) {
-            if (i > 0) {
-                sb.append("-");
-            }
-            sb.append(ids.get(i).toShortString());
-        }
-        return sb.toString();
-    }
-
-    private String buildTilePayload(Tile tile) {
-        if (tile == null) {
-            return "";
-        }
-        return "tile=" + tile.getId().toShortString();
-    }
-
-    private String buildDrawPayload(Tile tile, boolean rinshan) {
-        if (tile == null) {
-            return "";
-        }
-        return "tile=" + tile.getId().toShortString() + ";rinshan=" + rinshan;
-    }
-
-    private String buildCallPayload(CallRequest request, Tile lastDiscard, UUID lastDiscarder) {
-        if (request == null) {
-            return "";
-        }
-        StringBuilder sb = new StringBuilder();
-        sb.append("type=").append(request.getType().name());
-        List<TileId> ids = new ArrayList<>();
-        for (Tile tile : request.getTiles()) {
-            ids.add(tile.getId());
-        }
-        if (lastDiscard != null) {
-            ids.add(lastDiscard.getId());
-        }
-        String tiles = formatTileIds(ids);
-        if (!tiles.isEmpty()) {
-            sb.append(";tiles=").append(tiles);
-        }
-        if (lastDiscarder != null) {
-            sb.append(";from=").append(lastDiscarder);
-        }
-        return sb.toString();
-    }
-
-    private String buildKanPayload(KanOption option) {
-        if (option == null) {
-            return "";
-        }
-        StringBuilder sb = new StringBuilder();
-        sb.append("type=").append(option.getType().name());
-        sb.append(";tile=").append(option.getTileId().toShortString());
-        return sb.toString();
-    }
-
-    private String buildWinPayload(boolean tsumo, UUID discarder) {
-        if (tsumo) {
-            return "type=TSUMO";
-        }
-        if (discarder != null) {
-            return "type=RON;discarder=" + discarder;
-        }
-        return "type=RON";
-    }
-
-    private String buildRyuukyokuPayload(List<UUID> tenpaiPlayers) {
-        if (tenpaiPlayers == null || tenpaiPlayers.isEmpty()) {
-            return "tenpai=";
-        }
-        return "tenpai=" + formatPlayerIdList(tenpaiPlayers);
-    }
-
-    private String formatTileIds(List<TileId> ids) {
-        if (ids == null || ids.isEmpty()) {
-            return "";
-        }
-        List<TileId> sorted = new ArrayList<>(ids);
-        sorted.sort(Comparator.comparingInt(this::tileSortKey));
-        StringBuilder sb = new StringBuilder();
-        for (int i = 0; i < sorted.size(); i++) {
-            if (i > 0) {
-                sb.append("-");
-            }
-            sb.append(sorted.get(i).toShortString());
-        }
-        return sb.toString();
-    }
-
-    private int tileSortKey(TileId id) {
-        int suitBase;
-        switch (id.getSuit()) {
-            case MAN:
-                suitBase = 0;
-                break;
-            case PIN:
-                suitBase = 9;
-                break;
-            case SOU:
-                suitBase = 18;
-                break;
-            case HONOR:
-            default:
-                suitBase = 27;
-                break;
-        }
-        return suitBase + id.getRank();
-    }
-
-    private NamedTextColor callColor(CallType type) {
-        switch (type) {
-            case RON:
-                return NamedTextColor.RED;
-            case KAN:
-                return NamedTextColor.GOLD;
-            case PON:
-                return NamedTextColor.YELLOW;
-            case CHI:
-                return NamedTextColor.GREEN;
-            default:
-                return NamedTextColor.WHITE;
-        }
-    }
-
-    private String callName(CallType type) {
-        if (type == null) {
-            return "콜";
-        }
-        switch (type) {
-            case RON:
-                return "론";
-            case KAN:
-                return "깡";
-            case PON:
-                return "퐁";
-            case CHI:
-                return "치";
-            default:
-                return type.name();
-        }
-    }
-
-    private void showCallPopup(Player player, List<String> options, int remainingSeconds) {
-        if (player == null || options == null || options.isEmpty()) {
-            return;
-        }
-        String text = "울기: " + String.join("/", options);
-        if (remainingSeconds >= 0) {
-            text += " (" + remainingSeconds + "s)";
-        }
-        player.sendActionBar(text);
-    }
-
-    private void updateCallPopups(int remainingSeconds) {
-        if (engine == null || engine.getState() != GameState.CALL_WINDOW) {     
-            return;
-        }
-        if (dialogsEnabled()) {
-            return;
-        }
-        for (UUID playerId : players) {
-            if (playerId.equals(engine.getLastDiscarder())) {
-                continue;
-            }
-            Player player = plugin.getServer().getPlayer(playerId);
-            if (player == null) {
-                continue;
-            }
-            List<String> options = resolveCallOptions(playerId, player);
-            if (!options.isEmpty()) {
-                showCallPopup(player, options, remainingSeconds);
-            }
-        }
-    }
-
-    private void clearCallPopups() {
-        for (UUID playerId : players) {
-            Player player = plugin.getServer().getPlayer(playerId);
-            if (player != null) {
-                player.sendActionBar("");
-            }
-        }
-    }
-
-    private void clearCallDialogs() {
-        if (!dialogsEnabled()) {
-            callDialogPlayers.clear();
-            return;
-        }
-        for (UUID playerId : callDialogPlayers) {
-            Player player = plugin.getServer().getPlayer(playerId);
-            if (player != null) {
-                player.closeDialog();
-            }
-        }
-        callDialogPlayers.clear();
-    }
-
-    private void closeDialogsForAll() {
-        if (!dialogsEnabled()) {
-            return;
-        }
-        for (UUID playerId : players) {
-            Player player = plugin.getServer().getPlayer(playerId);
-            if (player != null) {
-                player.closeDialog();
-            }
-        }
-    }
-
-    private void closeDialog(Player player) {
-        if (player == null || !dialogsEnabled()) {
-            return;
-        }
-        player.closeDialog();
-    }
-
-    private boolean dialogsEnabled() {
-        return plugin.getConfig().getBoolean("ui.enableDialogs", false);
-    }
-
-    private boolean shouldConfirmDiscard() {
-        return dialogsEnabled() && plugin.getConfig().getBoolean("ui.confirmDiscard", false);
-    }
 
     private void updateFuritenWarnings() {
         if (engine == null) {
@@ -3253,7 +2449,7 @@ public class GameTable {
                 if (furitenNotified.add(playerId)) {
                     Player player = plugin.getServer().getPlayer(playerId);
                     if (player != null) {
-                        player.sendMessage("후리텐 상태라 론할 수 없어요.");
+                        player.sendMessage("론이 가능한 상태가 아니에요.");
                     }
                 }
             } else {
@@ -3270,73 +2466,24 @@ public class GameTable {
         int riichiPot = engine.getRoundState().getRiichiPot();
         int hands = engine.getRoundState().getHandsPlayed();
         RoundState round = engine.getRoundState();
-        broadcast("국: " + round.getRoundWind() + " " + round.getKyoku() + " / 딜러: " + round.getDealerWind());
+        broadcast("국 " + seatLabel(round.getRoundWind()) + " " + round.getKyoku()
+                + " / 딜러: " + seatLabel(round.getDealerWind()));
         broadcast("본장: " + honba + " / 공탁: " + riichiPot + " / 핸드: " + hands);
     }
 
     private void broadcastRoomRules() {
-        if (!roomMode) {
-            return;
-        }
-        broadcast("룸 룰: " + describeRules(getRulesSnapshot()));
-        updateRoomLobbyUi();
+        roomUi.broadcastRoomRules();
     }
 
     private void updateRoomLobbyUi() {
-        if (!roomMode || getState() != GameState.LOBBY) {
-            clearRoomBossBar();
-            return;
-        }
-        updateRoomBossBar();
-        String status = buildRoomStatusLine();
-        for (UUID playerId : players) {
-            Player player = plugin.getServer().getPlayer(playerId);
-            if (player != null) {
-                player.sendActionBar(status);
-            }
-        }
-    }
-
-    private void updateRoomBossBar() {
-        if (!roomMode || getState() != GameState.LOBBY) {
-            clearRoomBossBar();
-            return;
-        }
-        if (roomBossBar == null) {
-            roomBossBar = Bukkit.createBossBar(buildRoomBossBarTitle(), BarColor.BLUE, BarStyle.SEGMENTED_10);
-        }
-        roomBossBar.setTitle(buildRoomBossBarTitle());
-        double progress = players.isEmpty() ? 0.0 : (double) readyPlayers.size() / players.size();
-        roomBossBar.setProgress(Math.max(0.0, Math.min(1.0, progress)));
-        roomBossBar.removeAll();
-        for (UUID playerId : players) {
-            Player player = plugin.getServer().getPlayer(playerId);
-            if (player != null) {
-                roomBossBar.addPlayer(player);
-            }
-        }
-        roomBossBar.setVisible(true);
+        roomUi.updateRoomLobbyUi();
     }
 
     private void clearRoomBossBar() {
-        if (roomBossBar != null) {
-            roomBossBar.removeAll();
-            roomBossBar.setVisible(false);
-            roomBossBar = null;
-        }
+        roomUi.clearRoomBossBar();
     }
 
-    private String buildRoomBossBarTitle() {
-        return buildRoomStatusLine() + " | Rules: " + describeRules(getRulesSnapshot());
-    }
-
-    private String buildRoomStatusLine() {
-        String code = roomCode == null ? "-" : roomCode;
-        String hostName = hostId == null ? "-" : resolveName(hostId);
-        return "Room " + code + " (" + players.size() + "/" + MAX_PLAYERS + ") Seats " + seatAssignments.size() + "/" + MAX_PLAYERS + " Ready " + getReadyCount() + "/" + players.size() + " Host " + hostName;
-    }
-
-    private boolean assignSeat(Player player, SeatWind seat) {
+    boolean assignSeat(Player player, SeatWind seat) {
         if (player == null || seat == null) {
             return false;
         }
@@ -3356,7 +2503,6 @@ public class GameTable {
         }
         if (occupant != null && occupant.equals(playerId)) {
             clearSeat(playerId, true);
-            broadcast(resolveName(playerId) + " 님이 좌석 " + seatLabel(seat) + "에서 일어났어요.");
             updateRoomLobbyUi();
             return true;
         }
@@ -3366,7 +2512,6 @@ public class GameTable {
         seatAssignments.put(seat, playerId);
         playerSeats.put(playerId, seat);
         readyPlayers.remove(playerId);
-        broadcast(resolveName(playerId) + " 님이 좌석 " + seatLabel(seat) + "에 앉았어요.");
         updateRoomLobbyUi();
         return true;
     }
@@ -3381,14 +2526,13 @@ public class GameTable {
         for (SeatWind seat : SeatWind.values()) {
             if (!seatAssignments.containsKey(seat)) {
                 assignSeatInternal(playerId, seat, true);
-                broadcast(resolveName(playerId) + " 님이 좌석 " + seatLabel(seat) + "에 앉았어요.");
                 updateRoomLobbyUi();
                 return;
             }
         }
     }
 
-    private void clearSeat(UUID playerId, boolean updateUi) {
+    void clearSeat(UUID playerId, boolean updateUi) {
         if (playerId == null) {
             return;
         }
@@ -3439,38 +2583,38 @@ public class GameTable {
         return order;
     }
 
-    private String seatLabel(SeatWind seat) {
+    String seatLabel(SeatWind seat) {
         if (seat == null) {
-            return "UNSEATED";
+            return "알수없음";
         }
         switch (seat) {
             case EAST:
-                return "E";
+                return "동";
             case SOUTH:
-                return "S";
+                return "남";
             case WEST:
-                return "W";
+                return "서";
             case NORTH:
             default:
-                return "N";
+                return "북";
         }
     }
 
-    private String describeRules(GameRules rules) {
-        return "redDora=" + onOff(rules.isRedDoraEnabled())
-                + ", openTanyao=" + onOff(rules.isOpenTanyaoEnabled())
-                + ", ippatsu=" + onOff(rules.isIppatsuEnabled())
-                + ", uraDora=" + onOff(rules.isUraDoraEnabled())
-                + ", bots=" + onOff(botsEnabled)
-                + ", coach=" + onOff(coachEnabled)
-                + ", coachRank=" + onOff(coachRankDisabled);
+    String describeRules(GameRules rules) {
+        return "빨간 도라: " + onOff(rules.isRedDoraEnabled())
+                + " | 오픈 탄야오: " + onOff(rules.isOpenTanyaoEnabled())       
+                + " | 일발: " + onOff(rules.isIppatsuEnabled())
+                + " | 우라 도라: " + onOff(rules.isUraDoraEnabled())
+                + " | 봇: " + onOff(botsEnabled)
+                + " | 코치: " + onOff(coachEnabled)
+                + " | 코치 랭크 잠금: " + onOff(coachRankDisabled);
     }
 
-    private String onOff(boolean enabled) {
-        return enabled ? "ON" : "OFF";
+    String onOff(boolean enabled) {
+        return enabled ? "켜짐" : "꺼짐";
     }
 
-    private String formatRuleLine(String label, boolean enabled) {
+    String formatRuleLine(String label, boolean enabled) {
         return label + ": " + onOff(enabled);
     }
 
@@ -3483,10 +2627,10 @@ public class GameTable {
         return na.getSuit() == nb.getSuit() && na.getRank() == nb.getRank();
     }
 
-    private void sendRoomRulesSummary(Player player) {
-        player.sendMessage("룸 룰: " + describeRules(getRulesSnapshot()));
-        player.sendMessage("룰 변경: /mj room rules <rule> <on|off> 또는 /mj room rules preset <default|kuitan|classic>");
-        player.sendMessage("rule 목록: redDora, openTanyao, ippatsu, uraDora, bots, coach, coachRank");
+    void sendRoomRulesSummary(Player player) {
+        player.sendMessage("테이블 규칙: " + describeRules(getRulesSnapshot()));
+        player.sendMessage("규칙 변경: /mj table rules <rule> <on|off> 또는 /mj table rules preset <default|kuitan|classic>");
+        player.sendMessage("rule 목록: redDora, openTanyao, ippatsu(일발), uraDora, bots(봇), coach, coachRank");
     }
 
     private GameRules loadRules() {
@@ -3504,7 +2648,7 @@ public class GameTable {
         botDelayTicks = Math.max(1, plugin.getConfig().getInt("bots.delayTicks", 10));
     }
 
-    private boolean isCoachAllowed() {
+    boolean isCoachAllowed() {
         return roomMode && coachEnabled && !coachRankDisabled;
     }
 
@@ -3578,19 +2722,36 @@ public class GameTable {
         roundState = engine.getRoundState();
     }
 
-    private String resolveName(UUID playerId) {
+    DialogAction dialogAction(UUID targetId, Consumer<Player> action) {
+        return dialogs.dialogAction(targetId, action);
+    }
+
+    String resolveName(UUID playerId) {
+        if (playerId == null) {
+            return "-";
+        }
+        String cached = displayNameCache.get(playerId);
+        if (cached != null && !cached.isEmpty()) {
+            return cached;
+        }
         BotProfile bot = bots.get(playerId);
         if (bot != null) {
-            return bot.getName();
+            String name = bot.getName();
+            if (name != null && !name.isBlank()) {
+                displayNameCache.put(playerId, name);
+                return name;
+            }
         }
         Player player = plugin.getServer().getPlayer(playerId);
         if (player != null) {
-            return player.getName();
+            String name = player.getName();
+            displayNameCache.put(playerId, name);
+            return name;
         }
         return playerId.toString();
     }
 
-    private void broadcast(String message) {
+    void broadcast(String message) {
         for (UUID playerId : players) {
             Player player = plugin.getServer().getPlayer(playerId);
             if (player != null) {
@@ -3604,7 +2765,7 @@ public class GameTable {
             return;
         }
         StringBuilder sb = new StringBuilder();
-        sb.append("Dora indicator: ");
+        sb.append("코치: 추천 버림패 ");
         List<Tile> indicators = engine.getDoraIndicators();
         for (int i = 0; i < indicators.size(); i++) {
             if (i > 0) {
@@ -3616,14 +2777,118 @@ public class GameTable {
         worldUi.updateDora(this);
     }
 
+    private void startTurnTimer(UUID playerId) {
+        cancelTurnTimer();
+        if (engine == null || playerId == null || isBot(playerId)) {
+            return;
+        }
+        if (engine.getState() != GameState.TURN_DISCARD) {
+            return;
+        }
+        int seconds = plugin.getConfig().getInt("timers.turnSeconds", 20);
+        if (seconds <= 0) {
+            return;
+        }
+        Player player = plugin.getServer().getPlayer(playerId);
+        if (player == null) {
+            return;
+        }
+        turnSecondsRemaining = seconds;
+        turnTimerPlayer = playerId;
+        turnBossBar = Bukkit.createBossBar("내 차례: " + seconds + "초", BarColor.GREEN, BarStyle.SOLID);
+        turnBossBar.addPlayer(player);
+        turnBossBar.setProgress(1.0);
+        turnBossBar.setVisible(true);
+        turnBossBarTask = Bukkit.getScheduler().runTaskTimer(plugin, new Runnable() {
+            private int remaining = seconds;
+
+            @Override
+            public void run() {
+                remaining--;
+                if (remaining <= 0) {
+                    cancelTurnTimer();
+                    queue.enqueue(() -> forceRandomDiscard(playerId));
+                    return;
+                }
+                turnSecondsRemaining = remaining;
+                updateTurnBossBar(remaining, seconds);
+                updateWorldUiActions(-1);
+            }
+        }, 20L, 20L);
+    }
+
+    private void updateTurnBossBar(int remaining, int total) {
+        if (turnBossBar == null) {
+            return;
+        }
+        turnBossBar.setTitle("내 차례: " + remaining + "초");
+        turnBossBar.setProgress(Math.max(0.0, Math.min(1.0, remaining / (double) total)));
+    }
+
+    private void cancelTurnTimer() {
+        turnSecondsRemaining = -1;
+        turnTimerPlayer = null;
+        if (turnBossBarTask != null) {
+            turnBossBarTask.cancel();
+            turnBossBarTask = null;
+        }
+        if (turnBossBar != null) {
+            turnBossBar.removeAll();
+            turnBossBar.setVisible(false);
+            turnBossBar = null;
+        }
+    }
+
+    private void scheduleAutoNextHand() {
+        cancelAutoNextHand();
+        int seconds = plugin.getConfig().getInt("timers.nextHandDelaySeconds", 5);
+        if (seconds <= 0) {
+            startNextHand();
+            return;
+        }
+        broadcast("다음 국을 준비합니다 (" + seconds + "초)");
+        nextHandTask = Bukkit.getScheduler().runTaskLater(plugin,
+                () -> queue.enqueue(() -> {
+                    nextHandTask = null;
+                    startNextHand();
+                }),
+                seconds * 20L);
+    }
+
+    private void cancelAutoNextHand() {
+        if (nextHandTask != null) {
+            nextHandTask.cancel();
+            nextHandTask = null;
+        }
+    }
+
     private void startCallBossBar(int seconds) {
         clearCallBossBar();
-        callBossBar = Bukkit.createBossBar("Call window: " + seconds + "s", BarColor.YELLOW, BarStyle.SOLID);
+        callSecondsRemaining = seconds;
+        if (engine == null || engine.getState() != GameState.CALL_WINDOW) {
+            return;
+        }
+        List<Player> targets = new ArrayList<>();
         for (UUID playerId : players) {
-            Player player = plugin.getServer().getPlayer(playerId);
-            if (player != null) {
-                callBossBar.addPlayer(player);
+            if (playerId.equals(engine.getLastDiscarder())) {
+                continue;
             }
+            Player player = plugin.getServer().getPlayer(playerId);
+            if (player == null) {
+                continue;
+            }
+            List<String> options = resolveCallOptions(playerId, player);
+            if (options.isEmpty()) {
+                continue;
+            }
+            targets.add(player);
+        }
+        if (targets.isEmpty()) {
+            return;
+        }
+        callBossBar = Bukkit.createBossBar("울기 선택: " + seconds + "초", BarColor.YELLOW, BarStyle.SOLID);
+        for (Player player : targets) {
+            callBossBar.addPlayer(player);
         }
         callBossBar.setProgress(1.0);
         callBossBar.setVisible(true);
@@ -3637,15 +2902,17 @@ public class GameTable {
                     clearCallBossBar();
                     return;
                 }
-                callBossBar.setTitle("Call window: " + remaining + "s");
+                callSecondsRemaining = remaining;
+                callBossBar.setTitle("울기 선택: " + remaining + "초");
                 callBossBar.setProgress(Math.max(0.0, Math.min(1.0, remaining / (double) seconds)));
                 updateWorldUiActions(remaining);
-                updateCallPopups(remaining);
+                dialogs.updateCallPopups(remaining);
             }
         }, 20L, 20L);
     }
 
     private void clearCallBossBar() {
+        callSecondsRemaining = -1;
         if (callBossBarTask != null) {
             callBossBarTask.cancel();
             callBossBarTask = null;
@@ -3679,7 +2946,6 @@ public class GameTable {
             return;
         }
         worldUi.spawn(anchorPlayer.getLocation());
-        worldUi.updateYakuPanel();
     }
 
     private void updateWorldUi() {
@@ -3689,7 +2955,6 @@ public class GameTable {
         worldUi.updateBoard(this);
         worldUi.updateDora(this);
         worldUi.updateDiscards(this);
-        worldUi.updateYakuPanel();
         worldUi.updateActionButtons(this, -1);
     }
 
@@ -3700,18 +2965,18 @@ public class GameTable {
         worldUi.updateActionButtons(this, callSecondsRemaining);
     }
 
-    private static final class HandResult {
-        private final UUID winnerId;
-        private final UUID discarderId;
-        private final boolean tsumo;
-        private final ScoreResult score;
-        private final List<UUID> tenpaiPlayers;
-        private final Map<UUID, Integer> pointDeltas;
-        private final Map<UUID, Integer> pointsAfter;
-        private final int honbaApplied;
-        private final int riichiPotApplied;
-        private final boolean gameOver;
-        private final RoundState nextRound;
+    static final class HandResult {
+        final UUID winnerId;
+        final UUID discarderId;
+        final boolean tsumo;
+        final ScoreResult score;
+        final List<UUID> tenpaiPlayers;
+        final Map<UUID, Integer> pointDeltas;
+        final Map<UUID, Integer> pointsAfter;
+        final int honbaApplied;
+        final int riichiPotApplied;
+        final boolean gameOver;
+        final RoundState nextRound;
 
         private HandResult(UUID winnerId, UUID discarderId, boolean tsumo, ScoreResult score, List<UUID> tenpaiPlayers,
                            Map<UUID, Integer> pointDeltas, Map<UUID, Integer> pointsAfter,
@@ -3730,7 +2995,7 @@ public class GameTable {
         }
     }
 
-    private static final class CallOption {
+    static final class CallOption {
         private final CallType type;
         private final int chiIndex;
         private final List<Tile> tiles;
@@ -3741,16 +3006,31 @@ public class GameTable {
             this.tiles = tiles == null ? List.of() : List.copyOf(tiles);
         }
 
-        private CallType getType() {
+           CallType getType() {
             return type;
         }
 
-        private int getChiIndex() {
+           int getChiIndex() {
             return chiIndex;
         }
 
-        private List<Tile> getTiles() {
+           List<Tile> getTiles() {
             return tiles;
         }
     }
 }
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

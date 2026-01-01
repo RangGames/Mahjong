@@ -1,12 +1,12 @@
 package wiki.creeper.mahjong.ui;
 
 public enum WorldUiAction {
-    CHI("CHI"),
-    PON("PON"),
-    KAN("KAN"),
-    RON("RON"),
-    RIICHI("RIICHI"),
-    TSUMO("TSUMO");
+    CHI("치"),
+    PON("퐁"),
+    KAN("깡"),
+    RON("론"),
+    RIICHI("리치"),
+    TSUMO("쯔모");
 
     private final String label;
 

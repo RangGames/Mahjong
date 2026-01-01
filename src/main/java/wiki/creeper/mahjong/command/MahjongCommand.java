@@ -42,33 +42,39 @@ public class MahjongCommand implements CommandExecutor, TabCompleter {
         switch (sub) {
             case "create":
                 if (tableManager.getTableByPlayer(player).isPresent()) {
-                    player.sendMessage("이미 다른 테이블에 참여 중이에요. 먼저 나가주세요.");
+                    player.sendMessage("이미 다른 테이블에 참여 중이에요. 먼저 나간 뒤 다시 시도해 주세요.");
                     return true;
                 }
                 GameTable table = tableManager.createTable(player);
-                player.sendMessage("테이블을 만들었어요: " + table.getId());
+                player.sendMessage("테이블을 만들었어요. 코드: " + table.getRoomCode());
+                player.sendMessage("친구에게 코드를 알려서 초대할 수 있어요.");
+                table.showRoomLobby(player);
                 return true;
             case "room":
+            case "table":
                 return handleRoomCommand(player, args);
             case "join":
                 if (tableManager.getTableByPlayer(player).isPresent()) {
-                    player.sendMessage("이미 다른 테이블에 참여 중이에요. 먼저 나가주세요.");
+                    player.sendMessage("이미 다른 테이블에 참여 중이에요. 먼저 나간 뒤 다시 시도해 주세요.");
                     return true;
                 }
                 if (args.length < 2) {
-                    player.sendMessage("사용법: /mj join <tableId>");
+                    player.sendMessage("사용법: /mj join <테이블 코드|tableId>");
                     return true;
                 }
-                Optional<UUID> tableId = resolveTableId(args[1]);
-                if (tableId.isEmpty()) {
-                    player.sendMessage("테이블을 찾을 수 없어요: " + args[1]);
-                    return true;
-                }
-                GameTable target = tableManager.getTable(tableId.get()).orElse(null);
+                String targetKey = args[1];
+                GameTable target = tableManager.getRoomByCode(targetKey).orElse(null);
                 if (target == null) {
-                    player.sendMessage("테이블을 찾을 수 없어요: " + args[1]);
+                    Optional<UUID> tableId = resolveTableId(targetKey);
+                    if (tableId.isPresent()) {
+                        target = tableManager.getTable(tableId.get()).orElse(null);
+                    }
+                }
+                if (target == null) {
+                    player.sendMessage("테이블을 찾을 수 없어요: " + targetKey);
                     return true;
                 }
+                UUID targetId = target.getId();
                 if (target.getState() != GameState.LOBBY) {
                     player.sendMessage("게임이 이미 시작되어 입장할 수 없어요.");
                     return true;
@@ -77,8 +83,11 @@ public class MahjongCommand implements CommandExecutor, TabCompleter {
                     player.sendMessage("테이블이 가득 찼어요 (4인).");
                     return true;
                 }
-                if (tableManager.joinTable(player, tableId.get())) {
-                    player.sendMessage("테이블에 참가했어요: " + tableId.get());
+                if (tableManager.joinTable(player, targetId)) {
+                    String code = target.getRoomCode();
+                    String labelText = code != null ? "코드: " + code : "ID: " + targetId;
+                    player.sendMessage("테이블에 참가했어요. " + labelText);
+                    target.showRoomLobby(player);
                 } else {
                     player.sendMessage("테이블 입장에 실패했어요. 다시 시도해 주세요.");
                 }
@@ -275,6 +284,7 @@ public class MahjongCommand implements CommandExecutor, TabCompleter {
             List<String> subs = new ArrayList<>();
             subs.add("create");
             subs.add("room");
+            subs.add("table");
             subs.add("join");
             subs.add("leave");
             subs.add("start");
@@ -300,7 +310,7 @@ public class MahjongCommand implements CommandExecutor, TabCompleter {
             subs.add("replay");
             return subs;
         }
-        if (args.length == 2 && "room".equalsIgnoreCase(args[0])) {
+        if (args.length == 2 && isRoomAlias(args[0])) {
             List<String> subs = new ArrayList<>();
             subs.add("create");
             subs.add("join");
@@ -318,11 +328,14 @@ public class MahjongCommand implements CommandExecutor, TabCompleter {
         if (args.length == 2 && "join".equalsIgnoreCase(args[0])) {
             List<String> ids = new ArrayList<>();
             for (GameTable t : tableManager.getTables()) {
+                if (t.getRoomCode() != null) {
+                    ids.add(t.getRoomCode());
+                }
                 ids.add(t.getId().toString());
             }
             return ids;
         }
-        if (args.length == 3 && "room".equalsIgnoreCase(args[0]) && "join".equalsIgnoreCase(args[1])) {
+        if (args.length == 3 && isRoomAlias(args[0]) && "join".equalsIgnoreCase(args[1])) {
             List<String> codes = new ArrayList<>();
             for (GameTable t : tableManager.getTables()) {
                 if (t.isRoomMode() && t.getRoomCode() != null) {
@@ -331,13 +344,13 @@ public class MahjongCommand implements CommandExecutor, TabCompleter {
             }
             return codes;
         }
-        if (args.length == 3 && "room".equalsIgnoreCase(args[0]) && "rules".equalsIgnoreCase(args[1])) {
+        if (args.length == 3 && isRoomAlias(args[0]) && "rules".equalsIgnoreCase(args[1])) {
             return List.of("redDora", "openTanyao", "ippatsu", "uraDora", "bots", "coach", "coachRank", "preset");
         }
         if (args.length == 3 && "bot".equalsIgnoreCase(args[0])) {
             return List.of("BEGINNER", "NORMAL", "HARD");
         }
-        if (args.length == 4 && "room".equalsIgnoreCase(args[0]) && "rules".equalsIgnoreCase(args[1])) {
+        if (args.length == 4 && isRoomAlias(args[0]) && "rules".equalsIgnoreCase(args[1])) {
             if ("preset".equalsIgnoreCase(args[2])) {
                 return List.of("default", "kuitan", "classic");
             }
@@ -362,26 +375,26 @@ public class MahjongCommand implements CommandExecutor, TabCompleter {
         switch (action) {
             case "create":
                 if (tableManager.getTableByPlayer(player).isPresent()) {
-                    player.sendMessage("이미 다른 테이블에 참여 중이에요. 먼저 나가주세요.");
+                    player.sendMessage("이미 다른 테이블에 참여 중이에요. 먼저 나간 뒤 다시 시도해 주세요.");
                     return true;
                 }
                 GameTable room = tableManager.createRoom(player);
-                player.sendMessage("방을 만들었어요. 코드: " + room.getRoomCode());
-                player.sendMessage("당신이 방장입니다. /mj room rules 또는 로비 화면에서 룰을 설정해 주세요.");
+                player.sendMessage("테이블을 만들었어요. 코드: " + room.getRoomCode());
+                player.sendMessage("당신이 호스트예요. /mj table rules 또는 로비 화면에서 룰을 설정해 주세요.");
                 room.showRoomLobby(player);
                 return true;
             case "join":
                 if (tableManager.getTableByPlayer(player).isPresent()) {
-                    player.sendMessage("이미 다른 테이블에 참여 중이에요. 먼저 나가주세요.");
+                    player.sendMessage("이미 다른 테이블에 참여 중이에요. 먼저 나간 뒤 다시 시도해 주세요.");
                     return true;
                 }
                 if (args.length < 3) {
-                    player.sendMessage("사용법: /mj room join <code>");
+                    player.sendMessage("사용법: /mj table join <테이블 코드>");
                     return true;
                 }
                 Optional<GameTable> targetRoom = tableManager.getRoomByCode(args[2]);
                 if (targetRoom.isEmpty()) {
-                    player.sendMessage("방을 찾을 수 없어요: " + args[2]);
+                    player.sendMessage("테이블을 찾을 수 없어요: " + args[2]);
                     return true;
                 }
                 GameTable roomToJoin = targetRoom.get();
@@ -390,29 +403,29 @@ public class MahjongCommand implements CommandExecutor, TabCompleter {
                     return true;
                 }
                 if (roomToJoin.getPlayers().size() >= 4) {
-                    player.sendMessage("방이 가득 찼어요 (4인).");
+                    player.sendMessage("테이블이 가득 찼어요 (4인).");
                     return true;
                 }
                 if (tableManager.joinRoom(player, args[2])) {
-                    player.sendMessage("방에 참가했어요: " + roomToJoin.getRoomCode());
+                    player.sendMessage("테이블에 참가했어요: " + roomToJoin.getRoomCode());
                     roomToJoin.showRoomLobby(player);
                 } else {
-                    player.sendMessage("방 입장에 실패했어요. 다시 시도해 주세요.");
+                    player.sendMessage("테이블 입장에 실패했어요. 다시 시도해 주세요.");
                 }
                 return true;
             case "rules":
                 Optional<GameTable> tableForRules = tableManager.getTableByPlayer(player);
                 if (tableForRules.isEmpty()) {
-                    player.sendMessage("현재 방에 참여 중이 아니에요.");
+                    player.sendMessage("현재 테이블에 참여 중이 아니에요.");
                     return true;
                 }
                 GameTable ruleRoom = tableForRules.get();
                 if (!ruleRoom.isRoomMode()) {
-                    player.sendMessage("이 테이블은 방 모드가 아니에요.");
+                    player.sendMessage("이 테이블은 로비 모드가 아니에요.");
                     return true;
                 }
                 if (!ruleRoom.isHost(player.getUniqueId())) {
-                    player.sendMessage("방장만 룰을 변경할 수 있어요.");
+                    player.sendMessage("호스트만 룰을 변경할 수 있어요.");
                     return true;
                 }
                 if (ruleRoom.getState() != GameState.LOBBY) {
@@ -448,17 +461,17 @@ public class MahjongCommand implements CommandExecutor, TabCompleter {
                     sendRoomRulesUsage(player);
                     return true;
                 }
-                player.sendMessage("룸 룰을 업데이트했어요.");
+                player.sendMessage("테이블 룰을 업데이트했어요.");
                 return true;
             case "ready":
                 Optional<GameTable> tableForReady = tableManager.getTableByPlayer(player);
                 if (tableForReady.isEmpty()) {
-                    player.sendMessage("현재 방에 참여 중이 아니에요.");
+                    player.sendMessage("현재 테이블에 참여 중이 아니에요.");
                     return true;
                 }
                 GameTable readyRoom = tableForReady.get();
                 if (!readyRoom.isRoomMode()) {
-                    player.sendMessage("이 테이블은 방 모드가 아니에요.");
+                    player.sendMessage("이 테이블은 로비 모드가 아니에요.");
                     return true;
                 }
                 if (readyRoom.getState() != GameState.LOBBY) {
@@ -474,12 +487,12 @@ public class MahjongCommand implements CommandExecutor, TabCompleter {
             case "status":
                 Optional<GameTable> tableForStatus = tableManager.getTableByPlayer(player);
                 if (tableForStatus.isEmpty()) {
-                    player.sendMessage("현재 방에 참여 중이 아니에요.");
+                    player.sendMessage("현재 테이블에 참여 중이 아니에요.");
                     return true;
                 }
                 GameTable statusRoom = tableForStatus.get();
                 if (!statusRoom.isRoomMode()) {
-                    player.sendMessage("이 테이블은 방 모드가 아니에요.");
+                    player.sendMessage("이 테이블은 로비 모드가 아니에요.");
                     return true;
                 }
                 statusRoom.showRoomLobby(player);
@@ -497,16 +510,16 @@ public class MahjongCommand implements CommandExecutor, TabCompleter {
         }
         Optional<GameTable> tableOpt = tableManager.getTableByPlayer(player);
         if (tableOpt.isEmpty()) {
-            player.sendMessage("현재 방에 참여 중이 아니에요.");
+            player.sendMessage("현재 테이블에 참여 중이 아니에요.");
             return true;
         }
         GameTable table = tableOpt.get();
         if (!table.isRoomMode()) {
-            player.sendMessage("이 테이블은 방 모드가 아니에요.");
+            player.sendMessage("이 테이블은 로비 모드가 아니에요.");
             return true;
         }
         if (!table.isHost(player.getUniqueId())) {
-            player.sendMessage("방장만 봇을 관리할 수 있어요.");
+            player.sendMessage("호스트만 봇을 관리할 수 있어요.");
             return true;
         }
         if (table.getState() != GameState.LOBBY) {
@@ -514,7 +527,7 @@ public class MahjongCommand implements CommandExecutor, TabCompleter {
             return true;
         }
         if (!table.areBotsEnabled()) {
-            player.sendMessage("이 방에서는 봇이 비활성화되어 있어요.");
+            player.sendMessage("이 테이블에서는 봇이 비활성화되어 있어요.");
             return true;
         }
         if (args.length < 3) {
@@ -555,12 +568,12 @@ public class MahjongCommand implements CommandExecutor, TabCompleter {
         }
         Optional<GameTable> tableOpt = tableManager.getTableByPlayer(player);
         if (tableOpt.isEmpty()) {
-            player.sendMessage("현재 방에 참여 중이 아니에요.");
+            player.sendMessage("현재 테이블에 참여 중이 아니에요.");
             return true;
         }
         GameTable table = tableOpt.get();
         if (!table.isRoomMode()) {
-            player.sendMessage("이 테이블은 방 모드가 아니에요.");
+            player.sendMessage("이 테이블은 로비 모드가 아니에요.");
             return true;
         }
         String action = args[1].toLowerCase(Locale.ROOT);
@@ -578,21 +591,24 @@ public class MahjongCommand implements CommandExecutor, TabCompleter {
     }
 
     private void sendRoomUsage(Player player) {
-        player.sendMessage("사용법: /mj room (메뉴) | create | join <code> | rules | ready | status");
+        player.sendMessage("테이블 로비: /mj table (GUI) | /mj table status");
+        player.sendMessage("입장/생성: /mj create | /mj table create | /mj table join <코드>");
+        player.sendMessage("준비/규칙: /mj table ready | /mj table rules");
+        player.sendMessage("게임 시작: /mj start (호스트)");
     }
 
     private void sendRoomRulesUsage(Player player) {
-        player.sendMessage("사용법: /mj room rules <rule> <on|off>");
-        player.sendMessage("프리셋: /mj room rules preset <default|kuitan|classic>");
-        player.sendMessage("rule 목록: redDora, openTanyao, ippatsu, uraDora, bots, coach, coachRank");
+        player.sendMessage("규칙 변경: /mj table rules <rule> <on|off>");
+        player.sendMessage("프리셋: /mj table rules preset <default|kuitan|classic>");
+        player.sendMessage("규칙 목록: redDora, openTanyao, ippatsu(일발), uraDora, bots, coach, coachRank");
     }
 
     private void sendBotUsage(Player player) {
-        player.sendMessage("사용법: /mj bot add|remove <BEGINNER|NORMAL|HARD>");
+        player.sendMessage("봇: /mj bot add|remove <BEGINNER|NORMAL|HARD> (호스트)");
     }
 
     private void sendCoachUsage(Player player) {
-        player.sendMessage("사용법: /mj coach on|off");
+        player.sendMessage("코치: /mj coach on|off");
     }
 
     private Boolean parseBoolean(String value) {
@@ -614,9 +630,18 @@ public class MahjongCommand implements CommandExecutor, TabCompleter {
     }
 
     private void sendUsage(Player player) {
-        player.sendMessage("기본 명령어: /mj create | join <tableId> | leave | start | nexthand | hand | ron | pon | chi [번호] | kan [번호] | riichi | tsumo");
-        player.sendMessage("도구 명령어: /mj log export|replay [ticks] | bot add|remove <난이도> | coach on|off | info | list | disband <tableId>");
-        player.sendMessage("방 명령어: /mj room (메뉴) | create | join <code> | rules | ready | status");
+        player.sendMessage("마작 도움말");
+        player.sendMessage("테이블: /mj table (GUI) | /mj create | /mj join <코드|tableId> | /mj leave | /mj start");
+        player.sendMessage("로비 설정: /mj table ready | /mj table rules | /mj table status");
+        player.sendMessage("플레이: /mj hand | /mj ron | /mj tsumo | /mj riichi");
+        player.sendMessage("울기: /mj chi [번호] | /mj pon | /mj kan [번호]");
+        player.sendMessage("진행: /mj nexthand");
+        player.sendMessage("도구: /mj info | /mj list | /mj log export | /mj log replay [ticks]");
+        player.sendMessage("관리: /mj bot add|remove <BEGINNER|NORMAL|HARD> | /mj coach on|off | /mj disband <tableId>");
+    }
+
+    private boolean isRoomAlias(String value) {
+        return "room".equalsIgnoreCase(value) || "table".equalsIgnoreCase(value);
     }
 
     private Optional<UUID> resolveTableId(String input) {
@@ -634,3 +659,14 @@ public class MahjongCommand implements CommandExecutor, TabCompleter {
         }
     }
 }
+
+
+
+
+
+
+
+
+
+
+

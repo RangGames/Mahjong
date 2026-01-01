@@ -13,18 +13,19 @@ ai:
   debug: false
 timers:
   callWindowSeconds: 5
+  turnSeconds: 20
+  nextHandDelaySeconds: 5
 round:
   startingPoints: 25000
   length: SOUTH
   maxHands: 8
 resourcePack:
   enabled: false
-  url: ""
-  hash: ""
 ui:
   preferWorld: false
   enableDialogs: false
   confirmDiscard: false
+  roomGui: true
 scoring:
   riichiStick: 1000
   honbaRonBonus: 300

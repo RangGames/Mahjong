@@ -1,7 +1,9 @@
 package wiki.creeper.mahjong.ui;
 
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.EnumMap;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -15,6 +17,7 @@ import org.bukkit.World;
 import org.bukkit.block.data.BlockData;
 import org.bukkit.entity.BlockDisplay;
 import org.bukkit.entity.Display;
+import org.bukkit.entity.Entity;
 import org.bukkit.entity.ItemDisplay;
 import org.bukkit.entity.Interaction;
 import org.bukkit.entity.Player;
@@ -41,38 +44,62 @@ public class WorldUiManager {
     private static final float ACTION_WIDTH = 0.6f;
     private static final float ACTION_HEIGHT = 0.4f;
     private static final double TABLE_Y = 0.2;
+    private static final float TABLE_HEIGHT_SCALE = 0.2f;
     private static final double TABLE_SPACING = 0.85;
     private static final int TABLE_SIZE = 3;
+    private static final double SCOREBOARD_Y = 3.05;
+    private static final double DORA_TEXT_Y = 2.65;
+    private static final double ACTION_STATUS_Y = 1.75;
+    private static final double HAND_RESULT_X = -2.4;
+    private static final double HAND_RESULT_Y = 2.05;
     private static final int DISCARD_COLUMNS = 6;
-    private static final double DISCARD_Y = 0.35;
-    private static final double DISCARD_SPACING = 0.26;
-    private static final double DISCARD_ROW_SPACING = 0.23;
-    private static final double DORA_ITEM_Y = 2.45;
-    private static final double DORA_ITEM_SPACING = 0.35;
-    private static final double MELD_Y = 0.4;
-    private static final double MELD_SPACING = 0.28;
-    private static final double MELD_GROUP_SPACING = 0.12;
-    private static final Vector3f DISCARD_BLOCK_SCALE = new Vector3f(0.22f, 0.06f, 0.22f);
-    private static final Vector3f DISCARD_LABEL_SCALE = new Vector3f(0.45f, 0.45f, 0.45f);
-    private static final double DISCARD_LABEL_Y = 0.12;
-    private static final int SCOREBOARD_WIDTH = 140;
-    private static final int DORA_WIDTH = 120;
-    private static final int PANEL_WIDTH = 120;
-    private static final int ACTION_WIDTH_TEXT = 80;
+    private static final double DISCARD_Y = 0.95;
+    private static final double DISCARD_DEPTH = 2.1;
+    private static final double DISCARD_SPACING = 0.36;
+    private static final double DISCARD_ROW_SPACING = 0.32;
+    private static final double DORA_ITEM_Y = 2.25;
+    private static final double DORA_ITEM_SPACING = 0.32;
+    private static final double MELD_Y = 1.08;
+    private static final double MELD_DEPTH = 2.45;
+    private static final double MELD_SPACING = 0.34;
+    private static final double MELD_GROUP_SPACING = 0.2;
+    private static final double HAND_Y = 1.28;
+    private static final double HAND_SPACING = 0.32;
+    private static final double HAND_DRAWN_GAP = 0.26;
+    private static final double HAND_DRAWN_RAISE = 0.18;
+    private static final Vector3f DISCARD_BLOCK_SCALE = new Vector3f(0.23f, 0.07f, 0.23f);
+    private static final Vector3f DISCARD_ITEM_SCALE = new Vector3f(0.3f, 0.3f, 0.3f);
+    private static final Vector3f DISCARD_LABEL_SCALE = new Vector3f(0.26f, 0.26f, 0.26f);
+    private static final Vector3f HAND_ITEM_SCALE = new Vector3f(0.32f, 0.32f, 0.32f);
+    private static final Vector3f HAND_LABEL_SCALE = new Vector3f(0.26f, 0.26f, 0.26f);
+    private static final Vector3f MELD_LABEL_SCALE = new Vector3f(0.28f, 0.28f, 0.28f);
+    private static final Vector3f SEAT_LABEL_SCALE = new Vector3f(0.34f, 0.34f, 0.34f);
+    private static final double DISCARD_LABEL_Y = 0.1;
+    private static final double MELD_LABEL_Y = 0.14;
+    private static final double HAND_LABEL_Y = 0.1;
+    private static final double SEAT_LABEL_Y = 1.7;
+    private static final double SEAT_LABEL_RADIUS = 2.85;
+    private static final int SCOREBOARD_WIDTH = 160;
+    private static final int DORA_WIDTH = 140;
+    private static final int PANEL_WIDTH = 140;
+    private static final int ACTION_WIDTH_TEXT = 140;
 
     private final JavaPlugin plugin;
     private final UUID tableId;
     private final NamespacedKey tableKey;
     private final NamespacedKey actionKey;
+    private final NamespacedKey handTileKey;
+    private final NamespacedKey handOwnerKey;
     private Location anchor;
     private TextDisplay scoreBoard;
     private TextDisplay doraLine;
-    private TextDisplay yakuPanel;
     private TextDisplay actionStatus;
     private TextDisplay handResult;
     private final List<BlockDisplay> tableBlocks = new ArrayList<>();
     private final List<ItemDisplay> doraItems = new ArrayList<>();
     private final List<Display> discardDisplays = new ArrayList<>();
+    private final List<TextDisplay> seatLabels = new ArrayList<>();
+    private final Map<UUID, List<Entity>> handDisplays = new HashMap<>();
     private final Map<WorldUiAction, ActionButton> buttons = new EnumMap<>(WorldUiAction.class);
 
     public WorldUiManager(JavaPlugin plugin, UUID tableId) {
@@ -80,6 +107,8 @@ public class WorldUiManager {
         this.tableId = tableId;
         this.tableKey = new NamespacedKey(plugin, "table_id");
         this.actionKey = new NamespacedKey(plugin, "action");
+        this.handTileKey = new NamespacedKey(plugin, "hand_tile");
+        this.handOwnerKey = new NamespacedKey(plugin, "hand_owner");
     }
 
     public boolean isSpawned() {
@@ -100,19 +129,16 @@ public class WorldUiManager {
         base.setPitch(0);
         this.anchor = base;
         spawnTableSurface(world, this.anchor);
-        scoreBoard = spawnTextDisplay(world, this.anchor.clone().add(0, 2.8, 0), "Mahjong");
+        scoreBoard = spawnTextDisplay(world, this.anchor.clone().add(0, SCOREBOARD_Y, 0), "마작");
         scoreBoard.setLineWidth(SCOREBOARD_WIDTH);
         scoreBoard.setAlignment(TextDisplay.TextAlignment.CENTER);
-        doraLine = spawnTextDisplay(world, this.anchor.clone().add(0, 2.45, 0), "Dora: -");
+        doraLine = spawnTextDisplay(world, this.anchor.clone().add(0, DORA_TEXT_Y, 0), "도라: -");
         doraLine.setLineWidth(DORA_WIDTH);
         doraLine.setAlignment(TextDisplay.TextAlignment.CENTER);
-        actionStatus = spawnTextDisplay(world, this.anchor.clone().add(0, 1.55, 0), "");
+        actionStatus = spawnTextDisplay(world, this.anchor.clone().add(0, ACTION_STATUS_Y, 0), "대기 중");
         actionStatus.setLineWidth(ACTION_WIDTH_TEXT);
         actionStatus.setAlignment(TextDisplay.TextAlignment.CENTER);
-        yakuPanel = spawnTextDisplay(world, this.anchor.clone().add(2.0, 1.8, 0), "");
-        yakuPanel.setLineWidth(PANEL_WIDTH);
-        yakuPanel.setAlignment(TextDisplay.TextAlignment.LEFT);
-        handResult = spawnTextDisplay(world, this.anchor.clone().add(-2.0, 1.8, 0), "");
+        handResult = spawnTextDisplay(world, this.anchor.clone().add(HAND_RESULT_X, HAND_RESULT_Y, 0), "");
         handResult.setLineWidth(PANEL_WIDTH);
         handResult.setAlignment(TextDisplay.TextAlignment.LEFT);
         spawnActionButtons(world, this.anchor);
@@ -123,8 +149,10 @@ public class WorldUiManager {
             block.remove();
         }
         tableBlocks.clear();
+        clearAllHandDisplays();
         clearDoraItems();
         clearDiscardItems();
+        clearSeatLabels();
         if (scoreBoard != null) {
             scoreBoard.remove();
             scoreBoard = null;
@@ -132,10 +160,6 @@ public class WorldUiManager {
         if (doraLine != null) {
             doraLine.remove();
             doraLine = null;
-        }
-        if (yakuPanel != null) {
-            yakuPanel.remove();
-            yakuPanel = null;
         }
         if (actionStatus != null) {
             actionStatus.remove();
@@ -158,27 +182,45 @@ public class WorldUiManager {
         }
         GameEngine engine = table.getEngine();
         if (engine == null) {
-            scoreBoard.text(Component.text("Mahjong - waiting"));
+            scoreBoard.text(Component.text("마작 - 대기 중"));
             return;
         }
         RoundState round = engine.getRoundState();
         StringBuilder sb = new StringBuilder();
         int kyoku = round.getKyoku();
-        sb.append("Round: ").append(round.getRoundWind())
-                .append(" / Kyoku: ").append(kyoku)
-                .append(" / Dealer: ").append(round.getDealerWind())
-                .append("\nHonba: ").append(round.getHonba())
-                .append(" / Riichi: ").append(round.getRiichiPot())
-                .append("\nRemaining: ").append(round.getRemainingTiles())
-                .append(" / Hands: ").append(round.getHandsPlayed());
-        sb.append("\nPoints:");
+        sb.append("국: ").append(seatLabel(round.getRoundWind())).append(" ").append(kyoku)
+                .append(" / 딜러: ").append(seatLabel(round.getDealerWind()))
+                .append("\n본장: ").append(round.getHonba())
+                .append(" / 공탁: ").append(round.getRiichiPot())
+                .append("\n남은 패: ").append(round.getRemainingTiles())
+                .append(" / 진행: ").append(round.getHandsPlayed());
+        sb.append("\n점수:");
+        Map<SeatWind, PlayerState> seatStates = new EnumMap<>(SeatWind.class);
+        Map<SeatWind, String> seatNames = new EnumMap<>(SeatWind.class);
         for (UUID playerId : table.getPlayers()) {
             PlayerState state = engine.getPlayerState(playerId);
             if (state == null) {
                 continue;
             }
-            String name = resolveName(playerId);
-            sb.append("\n- ").append(name).append(": ").append(state.getPoints());
+            seatStates.put(state.getSeatWind(), state);
+            seatNames.put(state.getSeatWind(), table.getDisplayName(playerId));
+        }
+        for (SeatWind seat : SeatWind.values()) {
+            PlayerState state = seatStates.get(seat);
+            String name = seatNames.get(seat);
+            if (state == null || name == null) {
+                continue;
+            }
+            boolean dealer = round.getDealerWind() == seat;
+            boolean riichi = state.getHand().isRiichiDeclared();
+            sb.append("\n- ").append(seatLabel(seat));
+            if (dealer) {
+                sb.append("(딜러)");
+            }
+            sb.append(" ").append(name).append(": ").append(state.getPoints());
+            if (riichi) {
+                sb.append(" [리치]");
+            }
         }
         scoreBoard.text(Component.text(sb.toString(), NamedTextColor.WHITE));
     }
@@ -189,13 +231,13 @@ public class WorldUiManager {
         }
         GameEngine engine = table.getEngine();
         if (engine == null) {
-            doraLine.text(Component.text("Dora: -", NamedTextColor.GOLD));
+            doraLine.text(Component.text("도라: -", NamedTextColor.GOLD));
             clearDoraItems();
             return;
         }
         List<Tile> indicators = engine.getDoraIndicators();
         StringBuilder sb = new StringBuilder();
-        sb.append("Dora: ");
+        sb.append("도라: ");
         for (int i = 0; i < indicators.size(); i++) {
             if (i > 0) {
                 sb.append(", ");
@@ -211,32 +253,96 @@ public class WorldUiManager {
             return;
         }
         clearDiscardItems();
+        clearSeatLabels();
         GameEngine engine = table.getEngine();
         if (engine == null) {
             return;
         }
+        Tile lastDiscard = engine.getLastDiscard();
+        RoundState round = engine.getRoundState();
         for (UUID playerId : table.getPlayers()) {
             PlayerState state = engine.getPlayerState(playerId);
             if (state == null) {
                 continue;
             }
             SeatWind wind = state.getSeatWind();
-            spawnDiscardItems(state.getDiscards(), wind);
+            spawnSeatLabel(wind, table.getDisplayName(playerId), state, round);
+            spawnDiscardItems(state.getDiscards(), wind, lastDiscard);
             spawnMeldItems(state.getHand().getMelds(), wind);
         }
     }
 
-    public void updateYakuPanel() {
-        if (yakuPanel == null) {
+    public void updateHandDisplay(GameTable table, UUID playerId, PlayerState state) {
+        if (anchor == null || table == null || playerId == null || state == null) {
             return;
         }
-        // SIMPLIFIED: static panel for implemented yaku only, no ukeire or per-hand analysis.
-        StringBuilder sb = new StringBuilder();
-        sb.append("Yaku Panel");
-        for (wiki.creeper.mahjong.game.Yaku yaku : wiki.creeper.mahjong.game.Yaku.values()) {
-            sb.append("\n- ").append(yaku.getDisplayName());
+        clearHandDisplay(playerId);
+        Player owner = plugin.getServer().getPlayer(playerId);
+        if (owner == null) {
+            return;
         }
-        yakuPanel.text(Component.text(sb.toString(), NamedTextColor.AQUA));
+        GameEngine engine = table.getEngine();
+        Tile drawn = null;
+        if (engine != null && playerId.equals(engine.getLastDrawnPlayer())) {
+            drawn = engine.getLastDrawnTile();
+        }
+        List<Tile> tiles = new ArrayList<>(state.getHand().getConcealed());
+        if (drawn != null) {
+            int drawnId = drawn.getInstanceId();
+            tiles.removeIf(tile -> tile.getInstanceId() == drawnId);
+        }
+        tiles.sort(Comparator
+                .comparingInt((Tile tile) -> tileSortKey(tile))
+                .thenComparing(tile -> tile.getId().isRed() ? 1 : 0));
+        HandLayout layout = handLayout(state.getSeatWind());
+        List<Entity> spawned = new ArrayList<>();
+        for (int i = 0; i < tiles.size(); i++) {
+            Vector offset = layout.base.clone().add(layout.col.clone().multiply(i * HAND_SPACING));
+            Location location = anchor.clone().add(offset);
+            spawned.addAll(spawnHandTile(owner, playerId, tiles.get(i), location, false));
+        }
+        if (drawn != null) {
+            Vector offset = layout.base.clone().add(layout.col.clone().multiply(tiles.size() * HAND_SPACING + HAND_DRAWN_GAP));
+            Location location = anchor.clone().add(offset);
+            spawned.addAll(spawnHandTile(owner, playerId, drawn, location, true));
+        }
+        if (!spawned.isEmpty()) {
+            handDisplays.put(playerId, spawned);
+        }
+    }
+
+    public void clearHandDisplay(UUID playerId) {
+        if (playerId == null) {
+            return;
+        }
+        List<Entity> entities = handDisplays.remove(playerId);
+        if (entities == null) {
+            return;
+        }
+        for (Entity entity : entities) {
+            entity.remove();
+        }
+    }
+
+    public void clearAllHandDisplays() {
+        for (UUID playerId : new ArrayList<>(handDisplays.keySet())) {
+            clearHandDisplay(playerId);
+        }
+    }
+
+    public void hideHandDisplaysFor(Player viewer) {
+        if (viewer == null) {
+            return;
+        }
+        UUID viewerId = viewer.getUniqueId();
+        for (Map.Entry<UUID, List<Entity>> entry : handDisplays.entrySet()) {
+            if (viewerId.equals(entry.getKey())) {
+                continue;
+            }
+            for (Entity entity : entry.getValue()) {
+                viewer.hideEntity(plugin, entity);
+            }
+        }
     }
 
     public void updateHandResult(List<String> lines) {
@@ -262,20 +368,33 @@ public class WorldUiManager {
         }
         GameEngine engine = table.getEngine();
         if (engine == null) {
-            setActionStatus("Waiting");
+            setActionStatus("대기 중");
             disableAllActions();
             return;
         }
         if (engine.getState() == GameState.HAND_END) {
-            setActionStatus("HAND END");
+            setActionStatus("국 종료");
             disableAllActions();
             return;
         }
-        boolean callWindow = engine.getState() == GameState.CALL_WINDOW;        
+        boolean callWindow = engine.getState() == GameState.CALL_WINDOW;
         if (callWindow) {
-            setActionStatus(callSecondsRemaining >= 0 ? "CALL " + callSecondsRemaining + "s" : "CALL");
+            setActionStatus(callSecondsRemaining >= 0 ? "울기 " + callSecondsRemaining + "초" : "울기");
+        } else if (engine.getState() == GameState.TURN_DISCARD) {
+            UUID active = engine.getActivePlayer();
+            PlayerState activeState = active != null ? engine.getPlayerState(active) : null;
+            String name = active != null ? table.getDisplayName(active) : "-";
+            String seatTag = activeState != null ? seatLabel(activeState.getSeatWind()) + " " : "";
+            int remaining = table.getTurnSecondsRemaining();
+            if (remaining > 0) {
+                setActionStatus("턴: " + seatTag + name + " (" + remaining + "초)");
+            } else {
+                setActionStatus("턴: " + seatTag + name);
+            }
+        } else if (engine.getState() == GameState.LOBBY) {
+            setActionStatus("대기 중");
         } else {
-            setActionStatus("ACTIONS");
+            setActionStatus("진행 중");
         }
 
         boolean showChi = false;
@@ -351,6 +470,8 @@ public class WorldUiManager {
                 Location location = anchor.clone().add(start + (x * TABLE_SPACING), TABLE_Y, start + (z * TABLE_SPACING));
                 BlockDisplay display = world.spawn(location, BlockDisplay.class);
                 display.setBlock(Material.GREEN_TERRACOTTA.createBlockData());
+                display.setTransformation(new Transformation(new Vector3f(), new Quaternionf(),
+                        new Vector3f(1f, TABLE_HEIGHT_SCALE, 1f), new Quaternionf()));
                 tableBlocks.add(display);
             }
         }
@@ -372,7 +493,8 @@ public class WorldUiManager {
     private TextDisplay spawnTextDisplay(World world, Location location, String text) {
         TextDisplay display = world.spawn(location, TextDisplay.class);
         display.text(Component.text(text));
-        display.setBillboard(Display.Billboard.CENTER);
+        display.setBillboard(Display.Billboard.VERTICAL);
+        display.setRotation(0f, 0f);
         display.setSeeThrough(true);
         display.setShadowed(true);
         display.setBackgroundColor(Color.fromRGB(0, 0, 0));
@@ -395,6 +517,11 @@ public class WorldUiManager {
             ItemDisplay display = world.spawn(location, ItemDisplay.class);
             display.setItemStack(createTileItem(indicators.get(i)));
             display.setItemDisplayTransform(ItemDisplay.ItemDisplayTransform.FIXED);
+            display.setBillboard(Display.Billboard.FIXED);
+            display.setRotation(0f, 0f);
+            display.setShadowRadius(0);
+            display.setShadowStrength(0);
+            applyFlatTransform(display, DISCARD_ITEM_SCALE);
             doraItems.add(display);
         }
         // SIMPLIFIED: dora line uses flat item displays without orientation control.
@@ -407,7 +534,7 @@ public class WorldUiManager {
         doraItems.clear();
     }
 
-    private void spawnDiscardItems(List<Tile> discards, SeatWind wind) {
+    private void spawnDiscardItems(List<Tile> discards, SeatWind wind, Tile lastDiscard) {
         if (anchor == null || discards == null || discards.isEmpty()) {
             return;
         }
@@ -424,8 +551,10 @@ public class WorldUiManager {
                     .add(layout.row.clone().multiply(row * DISCARD_ROW_SPACING));
             Location location = anchor.clone().add(offset);
             Tile tile = discards.get(i);
-            spawnDiscardBlock(world, location, tile);
-            spawnDiscardLabel(world, location, tile);
+            boolean highlight = lastDiscard != null
+                    && tile.getInstanceId() == lastDiscard.getInstanceId();
+            spawnDiscardBlock(world, location, tile, highlight);
+            spawnDiscardLabel(world, location, tile, highlight, wind);
         }
         // SIMPLIFIED: discard layout uses fixed world axes and ignores player orientation.
     }
@@ -443,14 +572,23 @@ public class WorldUiManager {
         Vector dir = layout.col.clone();
         int offsetIndex = 0;
         for (Meld meld : melds) {
-            for (Tile tile : meld.getTiles()) {
+            int groupStart = offsetIndex;
+            List<Tile> tiles = meld.getTiles();
+            for (Tile tile : tiles) {
                 Vector offset = base.clone().add(dir.clone().multiply(offsetIndex * MELD_SPACING));
                 Location location = anchor.clone().add(offset);
-            spawnDiscardBlock(world, location, tile);
-            spawnDiscardLabel(world, location, tile);
-            offsetIndex++;
-        }
-            offsetIndex++;
+                spawnDiscardBlock(world, location, tile, false);
+                spawnDiscardLabel(world, location, tile, false, wind);
+                offsetIndex++;
+            }
+            if (!tiles.isEmpty()) {
+                double centerIndex = groupStart + (tiles.size() - 1) / 2.0;
+                Vector offset = base.clone().add(dir.clone().multiply(centerIndex * MELD_SPACING));
+                Location labelLocation = anchor.clone().add(offset);
+                spawnMeldLabel(world, labelLocation, meld.getType(), wind);
+            }
+            int gap = Math.max(1, (int) Math.round(MELD_GROUP_SPACING / MELD_SPACING));
+            offsetIndex += gap;
         }
         // SIMPLIFIED: meld layout ignores called-from orientation and uses a flat row.
     }
@@ -462,33 +600,304 @@ public class WorldUiManager {
         discardDisplays.clear();
     }
 
-    private void spawnDiscardBlock(World world, Location location, Tile tile) {
+    private void clearSeatLabels() {
+        for (TextDisplay label : seatLabels) {
+            label.remove();
+        }
+        seatLabels.clear();
+    }
+
+    private void spawnSeatLabel(SeatWind wind, String name, PlayerState state, RoundState round) {
+        if (anchor == null || wind == null || name == null || name.isBlank()) {
+            return;
+        }
+        World world = anchor.getWorld();
+        if (world == null) {
+            return;
+        }
+        boolean dealer = round != null && round.getDealerWind() == wind;
+        int points = state != null ? state.getPoints() : 0;
+        boolean riichi = state != null && state.getHand().isRiichiDeclared();
+        String seatText = seatLabel(wind) + (dealer ? " (딜러)" : "");
+        StringBuilder text = new StringBuilder();
+        text.append(seatText).append(": ").append(name);
+        text.append("\n점수: ").append(points);
+        if (riichi) {
+            text.append(" / 리치");
+        }
+        Vector offset = seatLabelOffset(wind);
+        Location location = anchor.clone().add(offset).add(0, SEAT_LABEL_Y, 0);
+        TextDisplay label = world.spawn(location, TextDisplay.class);
+        NamedTextColor color = dealer ? NamedTextColor.GOLD : NamedTextColor.AQUA;
+        label.text(Component.text(text.toString(), color));
+        label.setBillboard(Display.Billboard.VERTICAL);
+        label.setRotation(0f, 0f);
+        label.setShadowed(false);
+        label.setSeeThrough(true);
+        label.setLineWidth(80);
+        label.setAlignment(TextDisplay.TextAlignment.CENTER);
+        label.setBackgroundColor(Color.fromRGB(0, 0, 0));
+        label.setDefaultBackground(true);
+        label.setTextOpacity((byte) 200);
+        label.setTransformation(new Transformation(new Vector3f(), new Quaternionf(),
+                new Vector3f(SEAT_LABEL_SCALE), new Quaternionf()));
+        seatLabels.add(label);
+    }
+
+    private Vector seatLabelOffset(SeatWind wind) {
+        switch (wind) {
+            case EAST:
+                return new Vector(0, 0, SEAT_LABEL_RADIUS);
+            case SOUTH:
+                return new Vector(SEAT_LABEL_RADIUS, 0, 0);
+            case WEST:
+                return new Vector(0, 0, -SEAT_LABEL_RADIUS);
+            case NORTH:
+            default:
+                return new Vector(-SEAT_LABEL_RADIUS, 0, 0);
+        }
+    }
+
+    private List<Entity> spawnHandTile(Player owner, UUID playerId, Tile tile, Location location, boolean drawn) {
+        List<Entity> entities = new ArrayList<>();
+        if (tile == null || location == null || owner == null) {
+            return entities;
+        }
+        World world = location.getWorld();
+        if (world == null) {
+            return entities;
+        }
+        Location baseLocation = drawn ? location.clone().add(0, HAND_DRAWN_RAISE, 0) : location;
+        ItemDisplay display = world.spawn(baseLocation, ItemDisplay.class);
+        display.setItemStack(createTileItem(tile));
+        display.setItemDisplayTransform(ItemDisplay.ItemDisplayTransform.FIXED);
+        display.setBillboard(Display.Billboard.FIXED);
+        display.setRotation(0f, 0f);
+        display.setShadowRadius(0);
+        display.setShadowStrength(0);
+        display.setGlowing(drawn);
+        applyUprightTransform(display, HAND_ITEM_SCALE);
+        applyHandVisibility(owner, display);
+        entities.add(display);
+
+        if (!plugin.getConfig().getBoolean("resourcePack.enabled", false)) {
+            TextDisplay label = world.spawn(baseLocation.clone().add(0, HAND_LABEL_Y, 0), TextDisplay.class);
+            label.text(Component.text(tile.getId().toShortString(), NamedTextColor.WHITE));
+            label.setBillboard(Display.Billboard.VERTICAL);
+            label.setRotation(0f, 0f);
+            label.setShadowed(false);
+            label.setSeeThrough(true);
+            label.setLineWidth(16);
+            label.setAlignment(TextDisplay.TextAlignment.CENTER);
+            label.setBackgroundColor(Color.fromRGB(0, 0, 0));
+            label.setDefaultBackground(true);
+            label.setTextOpacity((byte) 220);
+            label.setTransformation(new Transformation(new Vector3f(), new Quaternionf(),
+                    new Vector3f(HAND_LABEL_SCALE), new Quaternionf()));
+            applyHandVisibility(owner, label);
+            entities.add(label);
+        }
+
+        Interaction interaction = world.spawn(baseLocation, Interaction.class);
+        interaction.setInteractionHeight(0.25f);
+        interaction.setInteractionWidth(0.25f);
+        PersistentDataContainer container = interaction.getPersistentDataContainer();
+        container.set(tableKey, PersistentDataType.STRING, tableId.toString());
+        container.set(handTileKey, PersistentDataType.INTEGER, tile.getInstanceId());
+        container.set(handOwnerKey, PersistentDataType.STRING, playerId.toString());
+        applyHandVisibility(owner, interaction);
+        entities.add(interaction);
+        return entities;
+    }
+
+    private void applyHandVisibility(Player owner, Entity entity) {
+        if (owner == null || entity == null) {
+            return;
+        }
+        for (Player player : owner.getWorld().getPlayers()) {
+            if (player.getUniqueId().equals(owner.getUniqueId())) {
+                player.showEntity(plugin, entity);
+            } else {
+                player.hideEntity(plugin, entity);
+            }
+        }
+    }
+
+    private void spawnDiscardBlock(World world, Location location, Tile tile, boolean highlight) {
+        if (plugin.getConfig().getBoolean("resourcePack.enabled", false)) {
+            ItemDisplay display = world.spawn(location, ItemDisplay.class);
+            display.setItemStack(createTileItem(tile));
+            display.setItemDisplayTransform(ItemDisplay.ItemDisplayTransform.FIXED);
+            display.setBillboard(Display.Billboard.FIXED);
+            display.setRotation(0f, 0f);
+            display.setShadowRadius(0);
+            display.setShadowStrength(0);
+            display.setGlowing(highlight);
+            applyFlatTransform(display, DISCARD_ITEM_SCALE);
+            discardDisplays.add(display);
+            return;
+        }
         BlockDisplay display = world.spawn(location, BlockDisplay.class);
         display.setBlock(createDiscardBlockData(tile));
         display.setBillboard(Display.Billboard.FIXED);
+        display.setRotation(0f, 0f);
         display.setShadowRadius(0);
         display.setShadowStrength(0);
+        display.setGlowing(highlight);
         display.setTransformation(new Transformation(new Vector3f(), new Quaternionf(),
                 new Vector3f(DISCARD_BLOCK_SCALE), new Quaternionf()));
         discardDisplays.add(display);
     }
 
-    private void spawnDiscardLabel(World world, Location location, Tile tile) {
+    private void spawnDiscardLabel(World world, Location location, Tile tile, boolean highlight, SeatWind wind) {
         if (tile == null || tile.getId() == null) {
             return;
         }
+        if (plugin.getConfig().getBoolean("resourcePack.enabled", false)) {
+            return;
+        }
         TextDisplay label = world.spawn(location.clone().add(0, DISCARD_LABEL_Y, 0), TextDisplay.class);
-        label.text(Component.text(tile.getId().toShortString(), NamedTextColor.WHITE));
+        String text = tile.getId().toShortString();
+        if (highlight) {
+            text += " (마지막)";
+        }
+        NamedTextColor color = highlight ? NamedTextColor.YELLOW : tileLabelColor(tile);
+        label.text(Component.text(text, color));
         label.setBillboard(Display.Billboard.FIXED);
+        label.setRotation(yawForSeat(wind), 0f);
         label.setShadowed(false);
         label.setSeeThrough(true);
-        label.setLineWidth(30);
+        label.setLineWidth(18);
+        label.setAlignment(TextDisplay.TextAlignment.CENTER);
         label.setBackgroundColor(Color.fromRGB(0, 0, 0));
-        label.setDefaultBackground(false);
+        label.setDefaultBackground(true);
         label.setTextOpacity((byte) 220);
         label.setTransformation(new Transformation(new Vector3f(), new Quaternionf(),
                 new Vector3f(DISCARD_LABEL_SCALE), new Quaternionf()));
         discardDisplays.add(label);
+    }
+
+    private void spawnMeldLabel(World world, Location location, wiki.creeper.mahjong.game.MeldType type, SeatWind wind) {
+        if (type == null) {
+            return;
+        }
+        TextDisplay label = world.spawn(location.clone().add(0, MELD_LABEL_Y, 0), TextDisplay.class);
+        label.text(Component.text(meldLabel(type), meldColor(type)));
+        label.setBillboard(Display.Billboard.FIXED);
+        label.setRotation(yawForSeat(wind), 0f);
+        label.setShadowed(false);
+        label.setSeeThrough(true);
+        label.setLineWidth(20);
+        label.setAlignment(TextDisplay.TextAlignment.CENTER);
+        label.setBackgroundColor(Color.fromRGB(0, 0, 0));
+        label.setDefaultBackground(true);
+        label.setTextOpacity((byte) 220);
+        label.setTransformation(new Transformation(new Vector3f(), new Quaternionf(),
+                new Vector3f(MELD_LABEL_SCALE), new Quaternionf()));
+        discardDisplays.add(label);
+    }
+
+    private String meldLabel(wiki.creeper.mahjong.game.MeldType type) {
+        switch (type) {
+            case CHI:
+                return "치";
+            case PON:
+                return "퐁";
+            case KAN_OPEN:
+                return "깡";
+            case KAN_CLOSED:
+                return "암깡";
+            case KAN_ADDED:
+                return "가깡";
+            default:
+                return "부로";
+        }
+    }
+
+    private NamedTextColor meldColor(wiki.creeper.mahjong.game.MeldType type) {
+        switch (type) {
+            case CHI:
+                return NamedTextColor.GREEN;
+            case PON:
+                return NamedTextColor.YELLOW;
+            case KAN_OPEN:
+            case KAN_CLOSED:
+            case KAN_ADDED:
+                return NamedTextColor.GOLD;
+            default:
+                return NamedTextColor.WHITE;
+        }
+    }
+
+    private NamedTextColor tileLabelColor(Tile tile) {
+        if (tile == null || tile.getId() == null) {
+            return NamedTextColor.WHITE;
+        }
+        if (tile.getId().isRed()) {
+            return NamedTextColor.RED;
+        }
+        switch (tile.getId().getSuit()) {
+            case MAN:
+                return NamedTextColor.RED;
+            case PIN:
+                return NamedTextColor.AQUA;
+            case SOU:
+                return NamedTextColor.GREEN;
+            case HONOR:
+            default:
+                return NamedTextColor.GOLD;
+        }
+    }
+
+    private float yawForSeat(SeatWind wind) {
+        if (wind == null) {
+            return 0f;
+        }
+        switch (wind) {
+            case EAST:
+                return 0f;
+            case SOUTH:
+                return -90f;
+            case WEST:
+                return 180f;
+            case NORTH:
+            default:
+                return 90f;
+        }
+    }
+
+    private void applyFlatTransform(Display display, Vector3f scale) {
+        if (display == null || scale == null) {
+            return;
+        }
+        Quaternionf rotation = new Quaternionf().rotationX((float) Math.toRadians(90));
+        display.setTransformation(new Transformation(new Vector3f(), rotation, new Vector3f(scale),
+                new Quaternionf()));
+    }
+
+    private void applyUprightTransform(Display display, Vector3f scale) {
+        if (display == null || scale == null) {
+            return;
+        }
+        display.setTransformation(new Transformation(new Vector3f(), new Quaternionf(), new Vector3f(scale),
+                new Quaternionf()));
+    }
+
+    private String seatLabel(SeatWind wind) {
+        if (wind == null) {
+            return "-";
+        }
+        switch (wind) {
+            case EAST:
+                return "동";
+            case SOUTH:
+                return "남";
+            case WEST:
+                return "서";
+            case NORTH:
+            default:
+                return "북";
+        }
     }
 
     private BlockData createDiscardBlockData(Tile tile) {
@@ -517,29 +926,79 @@ public class WorldUiManager {
         return material.createBlockData();
     }
 
+    private HandLayout handLayout(SeatWind wind) {
+        Vector base;
+        Vector col;
+        switch (wind) {
+            case EAST:
+                base = new Vector(-1.1, HAND_Y, 2.6);
+                col = new Vector(1, 0, 0);
+                break;
+            case SOUTH:
+                base = new Vector(2.6, HAND_Y, 1.1);
+                col = new Vector(0, 0, -1);
+                break;
+            case WEST:
+                base = new Vector(1.1, HAND_Y, -2.6);
+                col = new Vector(-1, 0, 0);
+                break;
+            case NORTH:
+            default:
+                base = new Vector(-2.6, HAND_Y, -1.1);
+                col = new Vector(0, 0, 1);
+                break;
+        }
+        return new HandLayout(base, col);
+    }
+
+    private int tileSortKey(Tile tile) {
+        if (tile == null || tile.getId() == null) {
+            return Integer.MAX_VALUE;
+        }
+        int suitBase;
+        switch (tile.getId().getSuit()) {
+            case MAN:
+                suitBase = 0;
+                break;
+            case PIN:
+                suitBase = 9;
+                break;
+            case SOU:
+                suitBase = 18;
+                break;
+            case HONOR:
+            default:
+                suitBase = 27;
+                break;
+        }
+        return suitBase + tile.getId().getRank();
+    }
+
     private DiscardLayout discardLayout(SeatWind wind) {
         Vector base;
         Vector col;
         Vector row;
+        double halfWidth = (DISCARD_COLUMNS - 1) * DISCARD_SPACING / 2.0;
+        double depth = DISCARD_DEPTH;
         switch (wind) {
             case EAST:
-                base = new Vector(-0.6, DISCARD_Y, 1.3);
+                base = new Vector(-halfWidth, DISCARD_Y, depth);
                 col = new Vector(1, 0, 0);
                 row = new Vector(0, 0, -1);
                 break;
             case SOUTH:
-                base = new Vector(1.3, DISCARD_Y, 0.6);
+                base = new Vector(depth, DISCARD_Y, halfWidth);
                 col = new Vector(0, 0, -1);
                 row = new Vector(-1, 0, 0);
                 break;
             case WEST:
-                base = new Vector(0.6, DISCARD_Y, -1.3);
+                base = new Vector(halfWidth, DISCARD_Y, -depth);
                 col = new Vector(-1, 0, 0);
                 row = new Vector(0, 0, 1);
                 break;
             case NORTH:
             default:
-                base = new Vector(-1.3, DISCARD_Y, -0.6);
+                base = new Vector(-depth, DISCARD_Y, -halfWidth);
                 col = new Vector(0, 0, 1);
                 row = new Vector(1, 0, 0);
                 break;
@@ -548,16 +1007,17 @@ public class WorldUiManager {
     }
 
     private Vector meldBaseOffset(SeatWind wind) {
+        double halfWidth = (DISCARD_COLUMNS - 1) * MELD_SPACING / 2.0;
         switch (wind) {
             case EAST:
-                return new Vector(-0.6, MELD_Y, 1.9);
+                return new Vector(-halfWidth, MELD_Y, MELD_DEPTH);
             case SOUTH:
-                return new Vector(1.9, MELD_Y, 0.6);
+                return new Vector(MELD_DEPTH, MELD_Y, halfWidth);
             case WEST:
-                return new Vector(0.6, MELD_Y, -1.9);
+                return new Vector(halfWidth, MELD_Y, -MELD_DEPTH);
             case NORTH:
             default:
-                return new Vector(-1.9, MELD_Y, -0.6);
+                return new Vector(-MELD_DEPTH, MELD_Y, -halfWidth);
         }
     }
 
@@ -565,6 +1025,12 @@ public class WorldUiManager {
         ItemStack item = new ItemStack(Material.PAPER);
         ItemMeta meta = item.getItemMeta();
         meta.displayName(Component.text(tile.getId().toShortString(), NamedTextColor.WHITE));
+        if (plugin.getConfig().getBoolean("resourcePack.enabled", false)) {
+            NamespacedKey modelKey = TileItemModel.resolve(plugin, tile.getId());
+            if (modelKey != null) {
+                meta.setItemModel(modelKey);
+            }
+        }
         item.setItemMeta(meta);
         return item;
     }
@@ -611,4 +1077,17 @@ public class WorldUiManager {
             this.row = row;
         }
     }
+
+    private static final class HandLayout {
+        private final Vector base;
+        private final Vector col;
+
+        private HandLayout(Vector base, Vector col) {
+            this.base = base;
+            this.col = col;
+        }
+    }
 }
+
+
+

@@ -48,13 +48,6 @@ public class TableManager {
 
     public GameTable createTable(Player owner) {
         GameTable table = new GameTable(plugin);
-        tables.put(table.getId(), table);
-        joinTable(owner, table.getId());
-        return table;
-    }
-
-    public GameTable createRoom(Player owner) {
-        GameTable table = new GameTable(plugin);
         String code = generateRoomCode();
         table.enableRoom(owner, code);
         tables.put(table.getId(), table);
@@ -63,11 +56,12 @@ public class TableManager {
         return table;
     }
 
+    public GameTable createRoom(Player owner) {
+        return createTable(owner);
+    }
+
     public boolean showRoomMenu(Player player) {
         if (player == null) {
-            return false;
-        }
-        if (!plugin.getConfig().getBoolean("ui.enableDialogs", false)) {
             return false;
         }
         Optional<GameTable> current = getTableByPlayer(player);
@@ -75,11 +69,14 @@ public class TableManager {
             current.get().showRoomLobby(player);
             return true;
         }
+        if (!plugin.getConfig().getBoolean("ui.enableDialogs", false)) {
+            return false;
+        }
         boolean alreadyInTable = current.isPresent();
         List<DialogBody> body = new ArrayList<>();
-        body.add(DialogBody.plainMessage(Component.text("방을 만들거나 입장할 수 있어요.", NamedTextColor.GRAY)));
-        body.add(DialogBody.plainMessage(Component.text("입장하려면 방 코드를 입력해 주세요.", NamedTextColor.DARK_GRAY)));
-        DialogInput codeInput = DialogInput.text("room_code", Component.text("방 코드", NamedTextColor.AQUA))
+        body.add(DialogBody.plainMessage(Component.text("테이블을 만들거나 초대 코드를 입력해 참가하세요.", NamedTextColor.GRAY)));
+        body.add(DialogBody.plainMessage(Component.text("코드는 대소문자 구분 없이 입력할 수 있어요.", NamedTextColor.DARK_GRAY)));
+        DialogInput codeInput = DialogInput.text("room_code", Component.text("테이블 코드", NamedTextColor.AQUA))
                 .labelVisible(true)
                 .maxLength(8)
                 .width(160)
@@ -97,16 +94,16 @@ public class TableManager {
                 return;
             }
             if (getTableByPlayer(clicker).isPresent()) {
-                clicker.sendMessage("이미 다른 테이블에 참여 중이에요. 먼저 나가주세요.");
+                clicker.sendMessage("이미 다른 테이블에 참여 중이에요. 먼저 나간 뒤 다시 시도해 주세요.");
                 return;
             }
-            GameTable room = createRoom(clicker);
-            clicker.sendMessage("방을 만들었어요. 코드: " + room.getRoomCode());
-            room.showRoomLobby(clicker);
+            GameTable table = createTable(clicker);
+            clicker.sendMessage("테이블을 만들었어요. 코드: " + table.getRoomCode());
+            table.showRoomLobby(clicker);
         }, ClickCallback.Options.builder().uses(1).build()) : null;
         actions.add(ActionButton.create(
-                Component.text("방 만들기", canCreate ? NamedTextColor.GREEN : NamedTextColor.DARK_GRAY),
-                Component.text(canCreate ? "새 방을 만들어요" : "먼저 현재 테이블에서 나가주세요", NamedTextColor.GRAY),
+                Component.text("테이블 만들기", canCreate ? NamedTextColor.GREEN : NamedTextColor.DARK_GRAY),
+                Component.text(canCreate ? "새 테이블을 만들어요" : "먼저 현재 테이블에서 나가주세요", NamedTextColor.GRAY),
                 180,
                 createAction
         ));
@@ -119,36 +116,36 @@ public class TableManager {
                 return;
             }
             if (getTableByPlayer(clicker).isPresent()) {
-                clicker.sendMessage("이미 다른 테이블에 참여 중이에요. 먼저 나가주세요.");
+                clicker.sendMessage("이미 다른 테이블에 참여 중이에요. 먼저 나간 뒤 다시 시도해 주세요.");
                 return;
             }
             String code = view.getText("room_code");
             if (code == null || code.isBlank()) {
-                clicker.sendMessage("방 코드를 입력해 주세요.");
+                clicker.sendMessage("테이블 코드를 입력해 주세요.");
                 return;
             }
             String trimmed = code.trim();
             if (!joinRoom(clicker, trimmed)) {
-                clicker.sendMessage("방을 찾을 수 없어요: " + trimmed);
+                clicker.sendMessage("테이블을 찾을 수 없어요: " + trimmed);
                 return;
             }
-            clicker.sendMessage("방에 참가했어요: " + trimmed.toUpperCase(Locale.ROOT));
-            getTableByPlayer(clicker).ifPresent(room -> room.showRoomLobby(clicker));
+            clicker.sendMessage("테이블에 참가했어요: " + trimmed.toUpperCase(Locale.ROOT));
+            getTableByPlayer(clicker).ifPresent(table -> table.showRoomLobby(clicker));
         }, ClickCallback.Options.builder().uses(1).build()) : null;
         actions.add(ActionButton.create(
-                Component.text("방 입장", canJoin ? NamedTextColor.AQUA : NamedTextColor.DARK_GRAY),
+                Component.text("테이블 입장", canJoin ? NamedTextColor.AQUA : NamedTextColor.DARK_GRAY),
                 Component.text(canJoin ? "코드로 입장해요" : "먼저 현재 테이블에서 나가주세요", NamedTextColor.GRAY),
                 180,
                 joinAction
         ));
         actions.add(ActionButton.create(
                 Component.text("닫기", NamedTextColor.DARK_GRAY),
-                Component.text("창 닫기", NamedTextColor.GRAY),
+                Component.text("창을 닫아요", NamedTextColor.GRAY),
                 120,
                 null
         ));
         Dialog dialog = Dialog.create(builder -> builder.empty()
-                .base(DialogBase.builder(Component.text("방 메뉴", NamedTextColor.GOLD))
+                .base(DialogBase.builder(Component.text("테이블 메뉴", NamedTextColor.GOLD))
                         .body(body)
                         .inputs(inputs)
                         .canCloseWithEscape(true)
@@ -158,7 +155,6 @@ public class TableManager {
         player.showDialog(dialog);
         return true;
     }
-
     public boolean joinTable(Player player, UUID tableId) {
         if (playerToTable.containsKey(player.getUniqueId())) {
             return false;
@@ -171,6 +167,7 @@ public class TableManager {
             return false;
         }
         playerToTable.put(player.getUniqueId(), tableId);
+        applyResourcePack(player);
         return true;
     }
 
@@ -262,4 +259,14 @@ public class TableManager {
         }
         return UUID.randomUUID().toString().substring(0, 6).toUpperCase(Locale.ROOT);
     }
+
+    private void applyResourcePack(Player player) {
+        if (player == null) {
+            return;
+        }
+        if (!plugin.getConfig().getBoolean("resourcePack.enabled", false)) {
+            return;
+        }
+    }
 }
+

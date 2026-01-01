@@ -17,22 +17,25 @@ public class WorldUiListener implements Listener {
     private final TableManager tableManager;
     private final NamespacedKey tableKey;
     private final NamespacedKey actionKey;
+    private final NamespacedKey handTileKey;
+    private final NamespacedKey handOwnerKey;
 
     public WorldUiListener(JavaPlugin plugin, TableManager tableManager) {
         this.tableManager = tableManager;
         this.tableKey = new NamespacedKey(plugin, "table_id");
         this.actionKey = new NamespacedKey(plugin, "action");
+        this.handTileKey = new NamespacedKey(plugin, "hand_tile");
+        this.handOwnerKey = new NamespacedKey(plugin, "hand_owner");
     }
 
     @EventHandler
     public void onInteract(PlayerInteractAtEntityEvent event) {
-        if (!(event.getRightClicked() instanceof Interaction interaction)) {
+        if (!(event.getRightClicked() instanceof Interaction interaction)) {    
             return;
         }
         PersistentDataContainer container = interaction.getPersistentDataContainer();
         String tableIdRaw = container.get(tableKey, PersistentDataType.STRING);
-        String actionRaw = container.get(actionKey, PersistentDataType.STRING);
-        if (tableIdRaw == null || actionRaw == null) {
+        if (tableIdRaw == null) {
             return;
         }
         event.setCancelled(true);
@@ -47,6 +50,19 @@ public class WorldUiListener implements Listener {
             return;
         }
         Player player = event.getPlayer();
+        Integer handTile = container.get(handTileKey, PersistentDataType.INTEGER);
+        if (handTile != null) {
+            String ownerRaw = container.get(handOwnerKey, PersistentDataType.STRING);
+            if (ownerRaw != null && !ownerRaw.equals(player.getUniqueId().toString())) {
+                return;
+            }
+            table.requestDiscardByInstance(player, handTile);
+            return;
+        }
+        String actionRaw = container.get(actionKey, PersistentDataType.STRING);
+        if (actionRaw == null) {
+            return;
+        }
         WorldUiAction action;
         try {
             action = WorldUiAction.valueOf(actionRaw);
