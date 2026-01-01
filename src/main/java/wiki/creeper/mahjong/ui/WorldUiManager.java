@@ -12,6 +12,7 @@ import org.bukkit.Location;
 import org.bukkit.Material;
 import org.bukkit.NamespacedKey;
 import org.bukkit.World;
+import org.bukkit.block.data.BlockData;
 import org.bukkit.entity.BlockDisplay;
 import org.bukkit.entity.Display;
 import org.bukkit.entity.ItemDisplay;
@@ -24,6 +25,9 @@ import org.bukkit.persistence.PersistentDataContainer;
 import org.bukkit.persistence.PersistentDataType;
 import org.bukkit.plugin.java.JavaPlugin;
 import org.bukkit.util.Vector;
+import org.bukkit.util.Transformation;
+import org.joml.Quaternionf;
+import org.joml.Vector3f;
 import wiki.creeper.mahjong.game.GameEngine;
 import wiki.creeper.mahjong.game.GameState;
 import wiki.creeper.mahjong.game.Meld;
@@ -48,6 +52,13 @@ public class WorldUiManager {
     private static final double MELD_Y = 0.4;
     private static final double MELD_SPACING = 0.28;
     private static final double MELD_GROUP_SPACING = 0.12;
+    private static final Vector3f DISCARD_BLOCK_SCALE = new Vector3f(0.22f, 0.06f, 0.22f);
+    private static final Vector3f DISCARD_LABEL_SCALE = new Vector3f(0.45f, 0.45f, 0.45f);
+    private static final double DISCARD_LABEL_Y = 0.12;
+    private static final int SCOREBOARD_WIDTH = 140;
+    private static final int DORA_WIDTH = 120;
+    private static final int PANEL_WIDTH = 120;
+    private static final int ACTION_WIDTH_TEXT = 80;
 
     private final JavaPlugin plugin;
     private final UUID tableId;
@@ -61,7 +72,7 @@ public class WorldUiManager {
     private TextDisplay handResult;
     private final List<BlockDisplay> tableBlocks = new ArrayList<>();
     private final List<ItemDisplay> doraItems = new ArrayList<>();
-    private final List<ItemDisplay> discardItems = new ArrayList<>();
+    private final List<Display> discardDisplays = new ArrayList<>();
     private final Map<WorldUiAction, ActionButton> buttons = new EnumMap<>(WorldUiAction.class);
 
     public WorldUiManager(JavaPlugin plugin, UUID tableId) {
@@ -84,14 +95,27 @@ public class WorldUiManager {
             return;
         }
         // SIMPLIFIED: anchor uses the first player's location, not a fixed board layout.
-        this.anchor = anchor.clone();
+        Location base = anchor.clone();
+        base.setYaw(0);
+        base.setPitch(0);
+        this.anchor = base;
         spawnTableSurface(world, this.anchor);
-        scoreBoard = spawnTextDisplay(world, anchor.clone().add(0, 1.8, 0), "Mahjong");
-        doraLine = spawnTextDisplay(world, anchor.clone().add(0, 2.2, 0), "Dora: -");
-        yakuPanel = spawnTextDisplay(world, anchor.clone().add(1.2, 1.6, 0), "");
-        actionStatus = spawnTextDisplay(world, anchor.clone().add(0, 1.35, 0), "");
-        handResult = spawnTextDisplay(world, anchor.clone().add(-1.2, 1.6, 0), "");
-        spawnActionButtons(world, anchor);
+        scoreBoard = spawnTextDisplay(world, this.anchor.clone().add(0, 2.8, 0), "Mahjong");
+        scoreBoard.setLineWidth(SCOREBOARD_WIDTH);
+        scoreBoard.setAlignment(TextDisplay.TextAlignment.CENTER);
+        doraLine = spawnTextDisplay(world, this.anchor.clone().add(0, 2.45, 0), "Dora: -");
+        doraLine.setLineWidth(DORA_WIDTH);
+        doraLine.setAlignment(TextDisplay.TextAlignment.CENTER);
+        actionStatus = spawnTextDisplay(world, this.anchor.clone().add(0, 1.55, 0), "");
+        actionStatus.setLineWidth(ACTION_WIDTH_TEXT);
+        actionStatus.setAlignment(TextDisplay.TextAlignment.CENTER);
+        yakuPanel = spawnTextDisplay(world, this.anchor.clone().add(2.0, 1.8, 0), "");
+        yakuPanel.setLineWidth(PANEL_WIDTH);
+        yakuPanel.setAlignment(TextDisplay.TextAlignment.LEFT);
+        handResult = spawnTextDisplay(world, this.anchor.clone().add(-2.0, 1.8, 0), "");
+        handResult.setLineWidth(PANEL_WIDTH);
+        handResult.setAlignment(TextDisplay.TextAlignment.LEFT);
+        spawnActionButtons(world, this.anchor);
     }
 
     public void remove() {
@@ -399,10 +423,9 @@ public class WorldUiManager {
                     .add(layout.col.clone().multiply(col * DISCARD_SPACING))
                     .add(layout.row.clone().multiply(row * DISCARD_ROW_SPACING));
             Location location = anchor.clone().add(offset);
-            ItemDisplay display = world.spawn(location, ItemDisplay.class);
-            display.setItemStack(createTileItem(discards.get(i)));
-            display.setItemDisplayTransform(ItemDisplay.ItemDisplayTransform.FIXED);
-            discardItems.add(display);
+            Tile tile = discards.get(i);
+            spawnDiscardBlock(world, location, tile);
+            spawnDiscardLabel(world, location, tile);
         }
         // SIMPLIFIED: discard layout uses fixed world axes and ignores player orientation.
     }
@@ -423,22 +446,75 @@ public class WorldUiManager {
             for (Tile tile : meld.getTiles()) {
                 Vector offset = base.clone().add(dir.clone().multiply(offsetIndex * MELD_SPACING));
                 Location location = anchor.clone().add(offset);
-                ItemDisplay display = world.spawn(location, ItemDisplay.class);
-                display.setItemStack(createTileItem(tile));
-                display.setItemDisplayTransform(ItemDisplay.ItemDisplayTransform.FIXED);
-                discardItems.add(display);
-                offsetIndex++;
-            }
+            spawnDiscardBlock(world, location, tile);
+            spawnDiscardLabel(world, location, tile);
+            offsetIndex++;
+        }
             offsetIndex++;
         }
         // SIMPLIFIED: meld layout ignores called-from orientation and uses a flat row.
     }
 
     private void clearDiscardItems() {
-        for (ItemDisplay display : discardItems) {
+        for (Display display : discardDisplays) {
             display.remove();
         }
-        discardItems.clear();
+        discardDisplays.clear();
+    }
+
+    private void spawnDiscardBlock(World world, Location location, Tile tile) {
+        BlockDisplay display = world.spawn(location, BlockDisplay.class);
+        display.setBlock(createDiscardBlockData(tile));
+        display.setBillboard(Display.Billboard.FIXED);
+        display.setShadowRadius(0);
+        display.setShadowStrength(0);
+        display.setTransformation(new Transformation(new Vector3f(), new Quaternionf(),
+                new Vector3f(DISCARD_BLOCK_SCALE), new Quaternionf()));
+        discardDisplays.add(display);
+    }
+
+    private void spawnDiscardLabel(World world, Location location, Tile tile) {
+        if (tile == null || tile.getId() == null) {
+            return;
+        }
+        TextDisplay label = world.spawn(location.clone().add(0, DISCARD_LABEL_Y, 0), TextDisplay.class);
+        label.text(Component.text(tile.getId().toShortString(), NamedTextColor.WHITE));
+        label.setBillboard(Display.Billboard.FIXED);
+        label.setShadowed(false);
+        label.setSeeThrough(true);
+        label.setLineWidth(30);
+        label.setBackgroundColor(Color.fromRGB(0, 0, 0));
+        label.setDefaultBackground(false);
+        label.setTextOpacity((byte) 220);
+        label.setTransformation(new Transformation(new Vector3f(), new Quaternionf(),
+                new Vector3f(DISCARD_LABEL_SCALE), new Quaternionf()));
+        discardDisplays.add(label);
+    }
+
+    private BlockData createDiscardBlockData(Tile tile) {
+        Material material = Material.WHITE_CONCRETE;
+        if (tile != null && tile.getId() != null) {
+            if (tile.getId().isRed()) {
+                material = Material.ORANGE_CONCRETE;
+            } else {
+                switch (tile.getId().getSuit()) {
+                    case MAN:
+                        material = Material.RED_CONCRETE;
+                        break;
+                    case PIN:
+                        material = Material.LIGHT_BLUE_CONCRETE;
+                        break;
+                    case SOU:
+                        material = Material.LIME_CONCRETE;
+                        break;
+                    case HONOR:
+                    default:
+                        material = Material.YELLOW_CONCRETE;
+                        break;
+                }
+            }
+        }
+        return material.createBlockData();
     }
 
     private DiscardLayout discardLayout(SeatWind wind) {

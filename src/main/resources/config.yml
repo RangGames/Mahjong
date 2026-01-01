@@ -1,8 +1,16 @@
-﻿rules:
+rules:
   redDora: true
   ippatsu: true
   openTanyao: false
   uraDora: true
+bots:
+  enabled: true
+  delayTicks: 10
+coach:
+  enabled: true
+  rankDisabled: false
+ai:
+  debug: false
 timers:
   callWindowSeconds: 5
 round:
@@ -22,3 +30,4 @@ scoring:
   honbaRonBonus: 300
   honbaTsumoBonus: 100
   notenPenaltyTotal: 3000
+

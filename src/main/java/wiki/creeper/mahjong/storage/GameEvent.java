@@ -1,4 +1,4 @@
-﻿package wiki.creeper.mahjong.storage;
+package wiki.creeper.mahjong.storage;
 
 import java.time.Instant;
 import java.util.UUID;

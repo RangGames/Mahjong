@@ -1,4 +1,4 @@
-﻿package wiki.creeper.mahjong.ui;
+package wiki.creeper.mahjong.ui;
 
 import java.util.UUID;
 import org.bukkit.Bukkit;

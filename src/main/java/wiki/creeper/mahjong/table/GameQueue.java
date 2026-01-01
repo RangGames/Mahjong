@@ -1,4 +1,4 @@
-﻿package wiki.creeper.mahjong.table;
+package wiki.creeper.mahjong.table;
 
 import java.util.ArrayDeque;
 import java.util.Queue;

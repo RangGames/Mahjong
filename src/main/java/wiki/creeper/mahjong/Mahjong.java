@@ -1,4 +1,4 @@
-﻿package wiki.creeper.mahjong;
+package wiki.creeper.mahjong;
 
 import org.bukkit.command.PluginCommand;
 import org.bukkit.plugin.java.JavaPlugin;

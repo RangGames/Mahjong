@@ -1,4 +1,4 @@
-﻿package wiki.creeper.mahjong.storage;
+package wiki.creeper.mahjong.storage;
 
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;

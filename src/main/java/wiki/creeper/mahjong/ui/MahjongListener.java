@@ -1,4 +1,4 @@
-﻿package wiki.creeper.mahjong.ui;
+package wiki.creeper.mahjong.ui;
 
 import org.bukkit.Material;
 import org.bukkit.entity.Player;

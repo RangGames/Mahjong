@@ -9,6 +9,7 @@
 out/
 
 docs
+assets
 
 # Compiled class file
 *.class
@@ -113,3 +114,4 @@ buildNumber.properties
 
 # Common working directory
 run/
+

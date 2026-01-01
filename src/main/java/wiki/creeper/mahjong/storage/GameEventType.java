@@ -1,4 +1,4 @@
-﻿package wiki.creeper.mahjong.storage;
+package wiki.creeper.mahjong.storage;
 
 public enum GameEventType {
     GAME_START,
@@ -6,6 +6,7 @@ public enum GameEventType {
     DRAW,
     DISCARD,
     CALL,
+    BOT_DECISION,
     RIICHI,
     WIN,
     RYUUKYOKU,

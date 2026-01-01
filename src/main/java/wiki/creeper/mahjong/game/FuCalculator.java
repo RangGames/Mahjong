@@ -1,4 +1,4 @@
-﻿package wiki.creeper.mahjong.game;
+package wiki.creeper.mahjong.game;
 
 
 public final class FuCalculator {
