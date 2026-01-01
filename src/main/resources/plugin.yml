@@ -1,0 +1,12 @@
+name: ${project.name}
+version: '${project.version}'
+main: wiki.creeper.mahjong.Mahjong
+api-version: '1.21'
+commands:
+  mj:
+    description: Mahjong root command
+    usage: /<command> <subcommand>
+permissions:
+  mahjong.admin:
+    description: Allows disbanding tables.
+    default: op

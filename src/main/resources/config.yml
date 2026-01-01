@@ -1,0 +1,24 @@
+﻿rules:
+  redDora: true
+  ippatsu: true
+  openTanyao: false
+  uraDora: true
+timers:
+  callWindowSeconds: 5
+round:
+  startingPoints: 25000
+  length: SOUTH
+  maxHands: 8
+resourcePack:
+  enabled: false
+  url: ""
+  hash: ""
+ui:
+  preferWorld: false
+  enableDialogs: false
+  confirmDiscard: false
+scoring:
+  riichiStick: 1000
+  honbaRonBonus: 300
+  honbaTsumoBonus: 100
+  notenPenaltyTotal: 3000
