@@ -65,6 +65,9 @@ final class GameTableRoomUi {
         String code = table.getRoomCode() == null ? "-" : table.getRoomCode();
         String hostName = table.getHostId() == null ? "-" : resolveName(table.getHostId());
         lines.add("테이블" + code + " / 호스트 " + hostName + " / 인원=" + players.size() + "/" + MAX_PLAYERS);
+        if (table.isRanked()) {
+            lines.add("모드: 랭크전(작혼 규칙)");
+        }
         lines.add("좌석: " + seatAssignments.size() + "/" + MAX_PLAYERS
                 + " / 준비 " + getReadyCount() + "/" + players.size());
         lines.add("규칙: " + describeRules(getRulesSnapshot()));
@@ -107,6 +110,10 @@ final class GameTableRoomUi {
             player.sendMessage("테이블이 로비 모드가 아니에요.");
             return;
         }
+        if (table.isRanked()) {
+            player.sendMessage("랭크전에서는 규칙을 변경할 수 없어요.");
+            return;
+        }
         if (!isHost(player.getUniqueId())) {
             player.sendMessage("호스트만 규칙을 변경할 수 있어요.");
             return;
@@ -132,6 +139,10 @@ final class GameTableRoomUi {
         }
         if (!table.isRoomMode()) {
             player.sendMessage("테이블이 로비 모드가 아니에요.");
+            return;
+        }
+        if (table.isRanked()) {
+            player.sendMessage("랭크전에서는 봇을 사용할 수 없어요.");
             return;
         }
         if (!isHost(player.getUniqueId())) {
@@ -184,6 +195,9 @@ final class GameTableRoomUi {
         String hostName = table.getHostId() == null ? "-" : resolveName(table.getHostId());
         body.add(DialogBody.plainMessage(Component.text("테이블 코드: " + code, NamedTextColor.GRAY)));
         body.add(DialogBody.plainMessage(Component.text("호스트: " + hostName, NamedTextColor.GRAY)));
+        if (table.isRanked()) {
+            body.add(DialogBody.plainMessage(Component.text("모드: 랭크전(작혼 규칙)", NamedTextColor.GOLD)));
+        }
         body.add(DialogBody.plainMessage(Component.text("인원: " + players.size() + "/" + MAX_PLAYERS, NamedTextColor.GRAY)));
         body.add(DialogBody.plainMessage(Component.text("좌석: " + seatAssignments.size() + "/" + MAX_PLAYERS, NamedTextColor.GRAY)));
         body.add(DialogBody.plainMessage(Component.text("준비: " + getReadyCount() + "/" + players.size(), NamedTextColor.GRAY)));

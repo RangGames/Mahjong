@@ -29,6 +29,30 @@ ui:
   roomGui: true
   world:
     compactDiscards: true
+ranked:
+  enabled: true
+  allowBots: false
+  allowCoach: false
+  length: SOUTH
+  startingPoints: 25000
+  targetPoints: 30000
+  oka: 20
+  rules:
+    redDora: true
+    openTanyao: true
+    ippatsu: true
+    uraDora: true
+  uma:
+    east:
+      - 10
+      - 5
+      - -5
+      - -10
+    south:
+      - 20
+      - 10
+      - -10
+      - -20
 scoring:
   riichiStick: 1000
   honbaRonBonus: 300

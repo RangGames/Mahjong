@@ -4,6 +4,7 @@ import java.util.Collection;
 import java.util.Optional;
 import java.util.UUID;
 import org.bukkit.entity.Player;
+import wiki.creeper.mahjong.rank.RankedManager;
 import wiki.creeper.mahjong.table.GameTable;
 import wiki.creeper.mahjong.table.TableManager;
 
@@ -20,9 +21,13 @@ public interface MahjongApi {
 
     GameTable createTable(Player owner);
 
+    GameTable createRankedTable(Player owner);
+
     boolean joinTable(Player player, UUID tableId);
 
     boolean spectateTable(Player player, UUID tableId);
 
     boolean leaveTable(Player player);
+
+    RankedManager getRankedManager();
 }

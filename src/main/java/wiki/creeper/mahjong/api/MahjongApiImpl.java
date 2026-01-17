@@ -4,14 +4,17 @@ import java.util.Collection;
 import java.util.Optional;
 import java.util.UUID;
 import org.bukkit.entity.Player;
+import wiki.creeper.mahjong.rank.RankedManager;
 import wiki.creeper.mahjong.table.GameTable;
 import wiki.creeper.mahjong.table.TableManager;
 
 public final class MahjongApiImpl implements MahjongApi {
     private final TableManager tableManager;
+    private final RankedManager rankedManager;
 
-    public MahjongApiImpl(TableManager tableManager) {
+    public MahjongApiImpl(TableManager tableManager, RankedManager rankedManager) {
         this.tableManager = tableManager;
+        this.rankedManager = rankedManager;
     }
 
     @Override
@@ -45,6 +48,11 @@ public final class MahjongApiImpl implements MahjongApi {
     }
 
     @Override
+    public GameTable createRankedTable(Player owner) {
+        return tableManager.createRankedTable(owner);
+    }
+
+    @Override
     public boolean joinTable(Player player, UUID tableId) {
         return tableManager.joinTable(player, tableId);
     }
@@ -57,5 +65,10 @@ public final class MahjongApiImpl implements MahjongApi {
     @Override
     public boolean leaveTable(Player player) {
         return tableManager.leaveTable(player);
+    }
+
+    @Override
+    public RankedManager getRankedManager() {
+        return rankedManager;
     }
 }

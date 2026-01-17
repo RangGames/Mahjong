@@ -5,6 +5,8 @@ import org.bukkit.plugin.java.JavaPlugin;
 import wiki.creeper.mahjong.api.MahjongApi;
 import wiki.creeper.mahjong.api.MahjongApiImpl;
 import wiki.creeper.mahjong.command.MahjongCommand;
+import wiki.creeper.mahjong.rank.RankedListener;
+import wiki.creeper.mahjong.rank.RankedManager;
 import wiki.creeper.mahjong.table.TableManager;
 import wiki.creeper.mahjong.ui.MahjongListener;
 import wiki.creeper.mahjong.ui.WorldUiListener;
@@ -13,12 +15,14 @@ public final class Mahjong extends JavaPlugin {
 
     private TableManager tableManager;
     private MahjongApi api;
+    private RankedManager rankedManager;
 
     @Override
     public void onEnable() {
         saveDefaultConfig();
         this.tableManager = new TableManager(this);
-        this.api = new MahjongApiImpl(tableManager);
+        this.rankedManager = new RankedManager(this);
+        this.api = new MahjongApiImpl(tableManager, rankedManager);
 
         PluginCommand command = getCommand("mj");
         if (command != null) {
@@ -30,10 +34,14 @@ public final class Mahjong extends JavaPlugin {
         }
         getServer().getPluginManager().registerEvents(new MahjongListener(tableManager), this);
         getServer().getPluginManager().registerEvents(new WorldUiListener(this, tableManager), this);
+        getServer().getPluginManager().registerEvents(new RankedListener(rankedManager), this);
     }
 
     @Override
     public void onDisable() {
+        if (rankedManager != null) {
+            rankedManager.save();
+        }
         if (tableManager != null) {
             tableManager.shutdown();
         }
@@ -41,5 +49,9 @@ public final class Mahjong extends JavaPlugin {
 
     public MahjongApi getApi() {
         return api;
+    }
+
+    public RankedManager getRankedManager() {
+        return rankedManager;
     }
 }

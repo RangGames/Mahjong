@@ -70,6 +70,18 @@ public class TableManager {
         return table;
     }
 
+    public GameTable createRankedTable(Player owner) {
+        GameTable table = new GameTable(plugin);
+        String code = generateRoomCode();
+        table.enableRoom(owner, code);
+        table.enableRanked();
+        tables.put(table.getId(), table);
+        roomCodeToTable.put(code.toUpperCase(Locale.ROOT), table.getId());
+        callEvent(new MahjongTableCreateEvent(table, owner));
+        joinTable(owner, table.getId());
+        return table;
+    }
+
     public GameTable createRoom(Player owner) {
         return createTable(owner);
     }
@@ -292,6 +304,10 @@ public class TableManager {
         playerToTable.clear();
         spectatorToTable.clear();
         roomCodeToTable.clear();
+    }
+
+    public boolean isRankedEnabled() {
+        return plugin.getConfig().getBoolean("ranked.enabled", true);
     }
 
     private void callEvent(Event event) {

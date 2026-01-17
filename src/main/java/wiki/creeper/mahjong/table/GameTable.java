@@ -117,6 +117,7 @@ public class GameTable {
     private String roomCode;
     private UUID hostId;
     private boolean roomMode;
+    private boolean rankedMode;
     private BukkitTask callTask;
     private BossBar callBossBar;
     private BukkitTask callBossBarTask;
@@ -242,6 +243,10 @@ public class GameTable {
         return roomCode;
     }
 
+    public boolean isRanked() {
+        return rankedMode;
+    }
+
     public UUID getHostId() {
         return hostId;
     }
@@ -295,7 +300,7 @@ public class GameTable {
         if (rules != null) {
             return rules;
         }
-        return loadRules();
+        return rankedMode ? loadRankedRules() : loadRules();
     }
 
     public List<String> getRoomStatusLines() {
@@ -330,13 +335,22 @@ public class GameTable {
         roomMode = true;
         roomCode = code;
         hostId = host.getUniqueId();
-        if (rules == null) {
+        if (rankedMode) {
+            rules = loadRankedRules();
+        } else if (rules == null) {
             rules = loadRules();
         }
         loadRoomOptions();
         seatAssignments.clear();
         playerSeats.clear();
         assignSeatInternal(host.getUniqueId(), SeatWind.EAST, true);
+        updateRoomLobbyUi();
+    }
+
+    public void enableRanked() {
+        rankedMode = true;
+        rules = loadRankedRules();
+        loadRankedOptions();
         updateRoomLobbyUi();
     }
 
@@ -369,6 +383,9 @@ public class GameTable {
     }
 
     public boolean applyPreset(String presetKey) {
+        if (rankedMode) {
+            return false;
+        }
         if (!roomMode || getState() != GameState.LOBBY || presetKey == null) {
             return false;
         }
@@ -394,6 +411,9 @@ public class GameTable {
     }
 
     public boolean updateRule(String ruleKey, Boolean value) {
+        if (rankedMode) {
+            return false;
+        }
         if (!roomMode || getState() != GameState.LOBBY || ruleKey == null) {
             return false;
         }
@@ -591,6 +611,9 @@ public class GameTable {
     }
 
     public boolean addBot(BotDifficulty difficulty) {
+        if (rankedMode) {
+            return false;
+        }
         if (!roomMode || getState() != GameState.LOBBY || difficulty == null) {
             return false;
         }
@@ -612,6 +635,9 @@ public class GameTable {
     }
 
     public boolean removeBot(BotDifficulty difficulty) {
+        if (rankedMode) {
+            return false;
+        }
         if (!roomMode || getState() != GameState.LOBBY) {
             return false;
         }
@@ -701,6 +727,10 @@ public class GameTable {
             player.sendMessage("코치는 테이블에서만 사용할 수 있어요.");
             return false;
         }
+        if (rankedMode) {
+            player.sendMessage("랭크전에서는 코치를 사용할 수 없어요.");
+            return false;
+        }
         UUID playerId = player.getUniqueId();
         if (!players.contains(playerId)) {
             player.sendMessage("이 테이블에 참여 중이 아니에요.");
@@ -755,8 +785,12 @@ public class GameTable {
                 players.addAll(seatOrder);
             }
         }
-        int startingPoints = plugin.getConfig().getInt("round.startingPoints", 25000);
-        if (rules == null) {
+        int startingPoints = rankedMode
+                ? plugin.getConfig().getInt("ranked.startingPoints", 25000)
+                : plugin.getConfig().getInt("round.startingPoints", 25000);
+        if (rankedMode) {
+            rules = loadRankedRules();
+        } else if (rules == null) {
             rules = loadRules();
         }
         eventLogger.clear();
@@ -2655,6 +2689,10 @@ public class GameTable {
             player.sendMessage("좌석 선택은 로비에서만 가능해요.");
             return false;
         }
+        if (rankedMode) {
+            player.sendMessage("랭크전에서는 좌석을 변경할 수 없어요.");
+            return false;
+        }
         UUID playerId = player.getUniqueId();
         if (!players.contains(playerId)) {
             return false;
@@ -2765,8 +2803,10 @@ public class GameTable {
     }
 
     String describeRules(GameRules rules) {
-        return "빨간 도라: " + onOff(rules.isRedDoraEnabled())
-                + " | 오픈 탄야오: " + onOff(rules.isOpenTanyaoEnabled())       
+        String mode = rankedMode ? "랭크" : "일반";
+        return "모드: " + mode
+                + " | 빨간 도라: " + onOff(rules.isRedDoraEnabled())
+                + " | 오픈 탄야오: " + onOff(rules.isOpenTanyaoEnabled())
                 + " | 일발: " + onOff(rules.isIppatsuEnabled())
                 + " | 우라 도라: " + onOff(rules.isUraDoraEnabled())
                 + " | 봇: " + onOff(botsEnabled)
@@ -2793,6 +2833,10 @@ public class GameTable {
 
     void sendRoomRulesSummary(Player player) {
         player.sendMessage("테이블 규칙: " + describeRules(getRulesSnapshot()));
+        if (rankedMode) {
+            player.sendMessage("랭크전에서는 규칙을 변경할 수 없어요.");
+            return;
+        }
         player.sendMessage("규칙 변경: /mj table rules <rule> <on|off> 또는 /mj table rules preset <default|kuitan|classic>");
         player.sendMessage("rule 목록: redDora, openTanyao, ippatsu(일발), uraDora, bots(봇), coach, coachRank");
     }
@@ -2805,6 +2849,14 @@ public class GameTable {
         return new GameRules(redDora, openTanyao, ippatsu, uraDora);
     }
 
+    private GameRules loadRankedRules() {
+        boolean redDora = plugin.getConfig().getBoolean("ranked.rules.redDora", true);
+        boolean openTanyao = plugin.getConfig().getBoolean("ranked.rules.openTanyao", true);
+        boolean ippatsu = plugin.getConfig().getBoolean("ranked.rules.ippatsu", true);
+        boolean uraDora = plugin.getConfig().getBoolean("ranked.rules.uraDora", true);
+        return new GameRules(redDora, openTanyao, ippatsu, uraDora);
+    }
+
     private void loadRoomOptions() {
         botsEnabled = plugin.getConfig().getBoolean("bots.enabled", true);
         coachEnabled = plugin.getConfig().getBoolean("coach.enabled", true);
@@ -2812,8 +2864,21 @@ public class GameTable {
         botDelayTicks = Math.max(1, plugin.getConfig().getInt("bots.delayTicks", 10));
     }
 
+    private void loadRankedOptions() {
+        botsEnabled = plugin.getConfig().getBoolean("ranked.allowBots", false);
+        coachEnabled = plugin.getConfig().getBoolean("ranked.allowCoach", false);
+        coachRankDisabled = true;
+        botDelayTicks = Math.max(1, plugin.getConfig().getInt("bots.delayTicks", 10));
+        if (!botsEnabled) {
+            removeAllBots();
+        }
+        if (!coachEnabled) {
+            disableCoachForAll("랭크전에서는 코치가 비활성화되어 있어요.");
+        }
+    }
+
     boolean isCoachAllowed() {
-        return roomMode && coachEnabled && !coachRankDisabled;
+        return roomMode && coachEnabled && !coachRankDisabled && !rankedMode;
     }
 
     private void disableCoachForAll(String reason) {
@@ -2836,10 +2901,15 @@ public class GameTable {
     }
 
     private SeatWind loadMaxRoundWind() {
-        String configured = plugin.getConfig().getString("round.length", null);
+        String configured = rankedMode
+                ? plugin.getConfig().getString("ranked.length", null)
+                : plugin.getConfig().getString("round.length", null);
         SeatWind parsed = parseRoundLength(configured);
         if (parsed != null) {
             return parsed;
+        }
+        if (rankedMode) {
+            return SeatWind.SOUTH;
         }
         int maxHands = plugin.getConfig().getInt("round.maxHands", 8);
         if (maxHands <= 4) {

@@ -53,6 +53,8 @@ public class MahjongCommand implements CommandExecutor, TabCompleter {
             case "room":
             case "table":
                 return handleRoomCommand(player, args);
+            case "ranked":
+                return handleRankedCommand(player, args);
             case "join":
                 if (tableManager.getTableByPlayer(player).isPresent()) {
                     player.sendMessage("이미 다른 테이블에 참여 중이에요. 먼저 나간 뒤 다시 시도해 주세요.");
@@ -321,6 +323,7 @@ public class MahjongCommand implements CommandExecutor, TabCompleter {
             subs.add("room");
             subs.add("table");
             subs.add("join");
+            subs.add("ranked");
             subs.add("spectate");
             subs.add("watch");
             subs.add("leave");
@@ -356,6 +359,9 @@ public class MahjongCommand implements CommandExecutor, TabCompleter {
             subs.add("status");
             return subs;
         }
+        if (args.length == 2 && "ranked".equalsIgnoreCase(args[0])) {
+            return List.of("create", "join");
+        }
         if (args.length == 2 && "bot".equalsIgnoreCase(args[0])) {
             return List.of("add", "remove");
         }
@@ -365,6 +371,19 @@ public class MahjongCommand implements CommandExecutor, TabCompleter {
         if (args.length == 2 && "join".equalsIgnoreCase(args[0])) {
             List<String> ids = new ArrayList<>();
             for (GameTable t : tableManager.getTables()) {
+                if (t.getRoomCode() != null) {
+                    ids.add(t.getRoomCode());
+                }
+                ids.add(t.getId().toString());
+            }
+            return ids;
+        }
+        if (args.length == 3 && "ranked".equalsIgnoreCase(args[0]) && "join".equalsIgnoreCase(args[1])) {
+            List<String> ids = new ArrayList<>();
+            for (GameTable t : tableManager.getTables()) {
+                if (!t.isRanked()) {
+                    continue;
+                }
                 if (t.getRoomCode() != null) {
                     ids.add(t.getRoomCode());
                 }
@@ -471,6 +490,10 @@ public class MahjongCommand implements CommandExecutor, TabCompleter {
                     player.sendMessage("이 테이블은 로비 모드가 아니에요.");
                     return true;
                 }
+                if (ruleRoom.isRanked()) {
+                    player.sendMessage("랭크전에서는 룰을 변경할 수 없어요.");
+                    return true;
+                }
                 if (!ruleRoom.isHost(player.getUniqueId())) {
                     player.sendMessage("호스트만 룰을 변경할 수 있어요.");
                     return true;
@@ -550,6 +573,70 @@ public class MahjongCommand implements CommandExecutor, TabCompleter {
         }
     }
 
+    private boolean handleRankedCommand(Player player, String[] args) {
+        if (!tableManager.isRankedEnabled()) {
+            player.sendMessage("랭크전이 비활성화되어 있어요.");
+            return true;
+        }
+        if (args.length < 2) {
+            sendRankedUsage(player);
+            return true;
+        }
+        String action = args[1].toLowerCase(Locale.ROOT);
+        switch (action) {
+            case "create":
+                if (tableManager.getTableByPlayer(player).isPresent()) {
+                    player.sendMessage("이미 다른 테이블에 참여 중이에요. 먼저 나간 뒤 다시 시도해 주세요.");
+                    return true;
+                }
+                GameTable rankedTable = tableManager.createRankedTable(player);
+                player.sendMessage("랭크전 테이블을 만들었어요. 코드: " + rankedTable.getRoomCode());
+                rankedTable.showRoomLobby(player);
+                return true;
+            case "join":
+                if (tableManager.getTableByPlayer(player).isPresent()) {
+                    player.sendMessage("이미 다른 테이블에 참여 중이에요. 먼저 나간 뒤 다시 시도해 주세요.");
+                    return true;
+                }
+                if (args.length < 3) {
+                    player.sendMessage("사용법: /mj ranked join <테이블 코드|tableId>");
+                    return true;
+                }
+                String targetKey = args[2];
+                GameTable target = tableManager.getRoomByCode(targetKey).orElse(null);
+                if (target == null) {
+                    Optional<UUID> tableId = resolveTableId(targetKey);
+                    if (tableId.isPresent()) {
+                        target = tableManager.getTable(tableId.get()).orElse(null);
+                    }
+                }
+                if (target == null || !target.isRanked()) {
+                    player.sendMessage("랭크전 테이블을 찾을 수 없어요: " + targetKey);
+                    return true;
+                }
+                if (target.getState() != GameState.LOBBY) {
+                    player.sendMessage("게임이 이미 시작되어 입장할 수 없어요.");
+                    return true;
+                }
+                if (target.getPlayers().size() >= 4) {
+                    player.sendMessage("테이블이 가득 찼어요 (4인).");
+                    return true;
+                }
+                if (tableManager.joinTable(player, target.getId())) {
+                    String code = target.getRoomCode();
+                    String labelText = code != null ? "코드: " + code : "ID: " + target.getId();
+                    player.sendMessage("랭크전 테이블에 참가했어요. " + labelText);
+                    target.showRoomLobby(player);
+                } else {
+                    player.sendMessage("랭크전 입장에 실패했어요. 다시 시도해 주세요.");
+                }
+                return true;
+            default:
+                sendRankedUsage(player);
+                return true;
+        }
+    }
+
     private boolean handleBotCommand(Player player, String[] args) {
         if (args.length < 2) {
             sendBotUsage(player);
@@ -563,6 +650,10 @@ public class MahjongCommand implements CommandExecutor, TabCompleter {
         GameTable table = tableOpt.get();
         if (!table.isRoomMode()) {
             player.sendMessage("이 테이블은 로비 모드가 아니에요.");
+            return true;
+        }
+        if (table.isRanked()) {
+            player.sendMessage("랭크전에서는 봇을 사용할 수 없어요.");
             return true;
         }
         if (!table.isHost(player.getUniqueId())) {
@@ -623,6 +714,10 @@ public class MahjongCommand implements CommandExecutor, TabCompleter {
             player.sendMessage("이 테이블은 로비 모드가 아니에요.");
             return true;
         }
+        if (table.isRanked()) {
+            player.sendMessage("랭크전에서는 코치를 사용할 수 없어요.");
+            return true;
+        }
         String action = args[1].toLowerCase(Locale.ROOT);
         switch (action) {
             case "on":
@@ -639,9 +734,13 @@ public class MahjongCommand implements CommandExecutor, TabCompleter {
 
     private void sendRoomUsage(Player player) {
         player.sendMessage("테이블 로비: /mj table (GUI) | /mj table status");
-        player.sendMessage("입장/생성: /mj create | /mj table create | /mj table join <코드>");
+        player.sendMessage("입장/생성: /mj create | /mj table create | /mj table join <코드> | /mj ranked create | /mj ranked join <코드>");
         player.sendMessage("준비/규칙: /mj table ready | /mj table rules");
         player.sendMessage("게임 시작: /mj start (호스트)");
+    }
+
+    private void sendRankedUsage(Player player) {
+        player.sendMessage("랭크전: /mj ranked create | /mj ranked join <코드|tableId>");
     }
 
     private void sendRoomRulesUsage(Player player) {
@@ -678,7 +777,7 @@ public class MahjongCommand implements CommandExecutor, TabCompleter {
 
     private void sendUsage(Player player) {
         player.sendMessage("마작 도움말");
-        player.sendMessage("테이블: /mj table (GUI) | /mj create | /mj join <코드|tableId> | /mj spectate <코드|tableId> | /mj leave | /mj start");
+        player.sendMessage("테이블: /mj table (GUI) | /mj create | /mj join <코드|tableId> | /mj ranked create|join <코드|tableId> | /mj spectate <코드|tableId> | /mj leave | /mj start");
         player.sendMessage("로비 설정: /mj table ready | /mj table rules | /mj table status");
         player.sendMessage("플레이: /mj hand | /mj ron | /mj tsumo | /mj riichi");
         player.sendMessage("호출: /mj chi [번호] | /mj pon | /mj kan [번호]");

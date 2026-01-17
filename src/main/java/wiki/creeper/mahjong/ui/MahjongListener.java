@@ -118,6 +118,10 @@ public class MahjongListener implements Listener {
             table.openRoomLobbyGui(player);
             return;
         }
+        if (table.isRanked()) {
+            player.sendMessage("랭크전에서는 규칙을 변경할 수 없어요.");
+            return;
+        }
         boolean actionable = slot == RoomInventory.SLOT_RULES_RED_DORA
                 || slot == RoomInventory.SLOT_RULES_OPEN_TANYAO
                 || slot == RoomInventory.SLOT_RULES_IPPATSU
@@ -174,6 +178,10 @@ public class MahjongListener implements Listener {
     private void handleBotsMenuClick(GameTable table, Player player, int slot) {
         if (slot == RoomInventory.SLOT_BOTS_BACK) {
             table.openRoomLobbyGui(player);
+            return;
+        }
+        if (table.isRanked()) {
+            player.sendMessage("랭크전에서는 봇을 사용할 수 없어요.");
             return;
         }
         boolean actionable = slot == RoomInventory.SLOT_BOTS_ADD_BEGINNER
