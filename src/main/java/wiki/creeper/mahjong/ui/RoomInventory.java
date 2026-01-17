@@ -13,6 +13,7 @@ public final class RoomInventory implements InventoryHolder {
     public static final int SLOT_LOBBY_SOUTH = 12;
     public static final int SLOT_LOBBY_WEST = 14;
     public static final int SLOT_LOBBY_NORTH = 16;
+    public static final int SLOT_LOBBY_BOTS = 6;
     public static final int SLOT_LOBBY_READY = 19;
     public static final int SLOT_LOBBY_START = 21;
     public static final int SLOT_LOBBY_RULES = 23;
@@ -30,6 +31,15 @@ public final class RoomInventory implements InventoryHolder {
     public static final int SLOT_RULES_PRESET_KUITAN = 20;
     public static final int SLOT_RULES_PRESET_CLASSIC = 21;
     public static final int SLOT_RULES_BACK = 25;
+
+    public static final int SLOT_BOTS_INFO = 4;
+    public static final int SLOT_BOTS_ADD_BEGINNER = 10;
+    public static final int SLOT_BOTS_ADD_NORMAL = 12;
+    public static final int SLOT_BOTS_ADD_HARD = 14;
+    public static final int SLOT_BOTS_REMOVE_BEGINNER = 19;
+    public static final int SLOT_BOTS_REMOVE_NORMAL = 21;
+    public static final int SLOT_BOTS_REMOVE_HARD = 23;
+    public static final int SLOT_BOTS_BACK = 25;
 
     private final UUID tableId;
     private final RoomMenuType type;

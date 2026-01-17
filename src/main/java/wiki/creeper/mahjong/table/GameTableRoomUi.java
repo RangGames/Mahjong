@@ -45,6 +45,7 @@ final class GameTableRoomUi {
     private final Map<UUID, BotProfile> bots;
     private RoomInventory lobbyMenu;
     private RoomInventory rulesMenu;
+    private RoomInventory botsMenu;
     private BossBar roomBossBar;
     private BossBar roomRulesBossBar;
 
@@ -90,6 +91,14 @@ final class GameTableRoomUi {
         player.openInventory(getRulesMenu().getInventory());
     }
 
+    void openRoomBotsGui(Player player) {
+        if (player == null || !roomGuiEnabled()) {
+            return;
+        }
+        updateRoomBotsMenu();
+        player.openInventory(getBotsMenu().getInventory());
+    }
+
     void showRoomRules(Player player) {
         if (player == null) {
             return;
@@ -115,6 +124,29 @@ final class GameTableRoomUi {
             return;
         }
         sendRoomRulesSummary(player);
+    }
+
+    void showRoomBots(Player player) {
+        if (player == null) {
+            return;
+        }
+        if (!table.isRoomMode()) {
+            player.sendMessage("테이블이 로비 모드가 아니에요.");
+            return;
+        }
+        if (!isHost(player.getUniqueId())) {
+            player.sendMessage("호스트만 봇을 관리할 수 있어요.");
+            return;
+        }
+        if (table.getState() != GameState.LOBBY) {
+            player.sendMessage("이미 게임이 시작되어 있어요.");
+            return;
+        }
+        if (roomGuiEnabled()) {
+            openRoomBotsGui(player);
+            return;
+        }
+        showBotDialog(player);
     }
 
     void showRoomLobby(Player player) {
@@ -473,6 +505,7 @@ final class GameTableRoomUi {
         if (roomGuiEnabled()) {
             updateRoomLobbyMenu();
             updateRoomRulesMenu();
+            updateRoomBotsMenu();
         }
     }
 
@@ -492,6 +525,13 @@ final class GameTableRoomUi {
             rulesMenu = new RoomInventory(table.getId(), RoomMenuType.RULES, "테이블 규칙");
         }
         return rulesMenu;
+    }
+
+    private RoomInventory getBotsMenu() {
+        if (botsMenu == null) {
+            botsMenu = new RoomInventory(table.getId(), RoomMenuType.BOTS, "봇 초대");
+        }
+        return botsMenu;
     }
 
     private void updateRoomLobbyMenu() {
@@ -515,6 +555,7 @@ final class GameTableRoomUi {
         inventory.setItem(RoomInventory.SLOT_LOBBY_NORTH, buildSeatItem(SeatWind.NORTH));
         inventory.setItem(RoomInventory.SLOT_LOBBY_READY, buildReadyItem());
         inventory.setItem(RoomInventory.SLOT_LOBBY_START, buildStartItem());
+        inventory.setItem(RoomInventory.SLOT_LOBBY_BOTS, buildBotsItem());
         inventory.setItem(RoomInventory.SLOT_LOBBY_RULES, buildRulesItem());
         inventory.setItem(RoomInventory.SLOT_LOBBY_LEAVE, buildLeaveItem());
     }
@@ -545,6 +586,39 @@ final class GameTableRoomUi {
         inventory.setItem(RoomInventory.SLOT_RULES_PRESET_KUITAN, buildPresetItem("쿠이탄 프리셋"));
         inventory.setItem(RoomInventory.SLOT_RULES_PRESET_CLASSIC, buildPresetItem("클래식 프리셋"));
         inventory.setItem(RoomInventory.SLOT_RULES_BACK,
+                buildMenuItem(Material.ARROW, "로비로", NamedTextColor.GRAY, List.of("클릭: 로비로 이동")));
+    }
+
+    private void updateRoomBotsMenu() {
+        if (!table.isRoomMode() || table.getState() != GameState.LOBBY) {
+            return;
+        }
+        Inventory inventory = getBotsMenu().getInventory();
+        inventory.clear();
+        List<String> infoLore = new ArrayList<>();
+        infoLore.add("봇 사용: " + onOff(table.areBotsEnabled()));
+        infoLore.add("인원: " + players.size() + "/" + MAX_PLAYERS);
+        infoLore.add("봇: " + bots.size() + "명");
+        inventory.setItem(RoomInventory.SLOT_BOTS_INFO,
+                buildMenuItem(Material.PAPER, "봇 초대", NamedTextColor.AQUA, infoLore));
+
+        boolean botsEnabled = table.areBotsEnabled();
+        boolean canAdd = botsEnabled && players.size() < MAX_PLAYERS;
+        inventory.setItem(RoomInventory.SLOT_BOTS_ADD_BEGINNER,
+                buildBotAddItem("봇 추가 (초급)", canAdd, botsEnabled));
+        inventory.setItem(RoomInventory.SLOT_BOTS_ADD_NORMAL,
+                buildBotAddItem("봇 추가 (중급)", canAdd, botsEnabled));
+        inventory.setItem(RoomInventory.SLOT_BOTS_ADD_HARD,
+                buildBotAddItem("봇 추가 (상급)", canAdd, botsEnabled));
+
+        inventory.setItem(RoomInventory.SLOT_BOTS_REMOVE_BEGINNER,
+                buildBotRemoveItem("봇 제거 (초급)", hasBotDifficulty(BotDifficulty.BEGINNER)));
+        inventory.setItem(RoomInventory.SLOT_BOTS_REMOVE_NORMAL,
+                buildBotRemoveItem("봇 제거 (중급)", hasBotDifficulty(BotDifficulty.NORMAL)));
+        inventory.setItem(RoomInventory.SLOT_BOTS_REMOVE_HARD,
+                buildBotRemoveItem("봇 제거 (상급)", hasBotDifficulty(BotDifficulty.HARD)));
+
+        inventory.setItem(RoomInventory.SLOT_BOTS_BACK,
                 buildMenuItem(Material.ARROW, "로비로", NamedTextColor.GRAY, List.of("클릭: 로비로 이동")));
     }
 
@@ -610,6 +684,42 @@ final class GameTableRoomUi {
                 "규칙 설정 (호스트 전용)",
                 NamedTextColor.AQUA,
                 List.of("클릭: 규칙 화면"));
+    }
+
+    private ItemStack buildBotsItem() {
+        boolean enabled = table.areBotsEnabled();
+        List<String> lore = new ArrayList<>();
+        lore.add("봇 사용: " + onOff(enabled));
+        lore.add("봇: " + bots.size() + "명");
+        lore.add("클릭: 봇 초대");
+        lore.add("호스트 전용");
+        Material material = enabled ? Material.LIGHT_BLUE_DYE : Material.GRAY_DYE;
+        NamedTextColor color = enabled ? NamedTextColor.AQUA : NamedTextColor.DARK_GRAY;
+        return buildMenuItem(material, "봇 초대", color, lore);
+    }
+
+    private ItemStack buildBotAddItem(String label, boolean canAdd, boolean botsEnabled) {
+        List<String> lore = new ArrayList<>();
+        lore.add("호스트 전용");
+        if (!botsEnabled) {
+            lore.add("봇 사용이 꺼져 있어요.");
+        } else if (!canAdd) {
+            lore.add("자리가 없어요.");
+        } else {
+            lore.add("클릭: 봇 추가");
+        }
+        Material material = canAdd ? Material.LIME_DYE : Material.GRAY_DYE;
+        NamedTextColor color = canAdd ? NamedTextColor.GREEN : NamedTextColor.DARK_GRAY;
+        return buildMenuItem(material, label, color, lore);
+    }
+
+    private ItemStack buildBotRemoveItem(String label, boolean enabled) {
+        List<String> lore = new ArrayList<>();
+        lore.add("호스트 전용");
+        lore.add(enabled ? "클릭: 봇 제거" : "해당 난이도 봇 없음");
+        Material material = enabled ? Material.RED_DYE : Material.GRAY_DYE;
+        NamedTextColor color = enabled ? NamedTextColor.RED : NamedTextColor.DARK_GRAY;
+        return buildMenuItem(material, label, color, lore);
     }
 
     private ItemStack buildLeaveItem() {

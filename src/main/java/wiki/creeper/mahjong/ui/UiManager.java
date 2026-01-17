@@ -97,7 +97,7 @@ public class UiManager {
     public ItemStack createTileItem(Tile tile) {
         ItemStack item = new ItemStack(Material.PAPER);
         ItemMeta meta = item.getItemMeta();
-        meta.displayName(Component.text(tile.getId().toShortString()));
+        meta.displayName(Component.text(tile.getId().toDisplayString()));
         if (plugin.getConfig().getBoolean("resourcePack.enabled", false)) {
             NamespacedKey modelKey = TileItemModel.resolve(plugin, tile.getId());
             if (modelKey != null) {

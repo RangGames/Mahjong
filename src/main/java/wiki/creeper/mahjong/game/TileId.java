@@ -81,6 +81,47 @@ public final class TileId {
         return "" + suit.getCode() + rank;
     }
 
+    public String toDisplayString() {
+        if (suit == TileSuit.HONOR) {
+            switch (rank) {
+                case 1:
+                    return "동패";
+                case 2:
+                    return "남패";
+                case 3:
+                    return "서패";
+                case 4:
+                    return "북패";
+                case 5:
+                    return "백";
+                case 6:
+                    return "발";
+                case 7:
+                    return "중";
+                default:
+                    return "자패";
+            }
+        }
+        String suffix;
+        switch (suit) {
+            case MAN:
+                suffix = "만";
+                break;
+            case PIN:
+                suffix = "통";
+                break;
+            case SOU:
+            default:
+                suffix = "삭";
+                break;
+        }
+        String base = rank + suffix;
+        if (red) {
+            return "적" + base;
+        }
+        return base;
+    }
+
     private void validate() {
         if (suit == TileSuit.HONOR) {
             if (rank < 1 || rank > 7) {

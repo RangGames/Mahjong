@@ -21,13 +21,18 @@ import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.event.ClickCallback;
 import net.kyori.adventure.text.format.NamedTextColor;
 import org.bukkit.entity.Player;
+import org.bukkit.event.Event;
 import org.bukkit.plugin.java.JavaPlugin;
+import wiki.creeper.mahjong.api.event.MahjongTableCreateEvent;
+import wiki.creeper.mahjong.api.event.MahjongTableJoinEvent;
+import wiki.creeper.mahjong.api.event.MahjongTableLeaveEvent;
 
 public class TableManager {
 
     private final JavaPlugin plugin;
     private final Map<UUID, GameTable> tables = new HashMap<>();
     private final Map<UUID, UUID> playerToTable = new HashMap<>();
+    private final Map<UUID, UUID> spectatorToTable = new HashMap<>();
     private final Map<String, UUID> roomCodeToTable = new HashMap<>();
 
     public TableManager(JavaPlugin plugin) {
@@ -46,12 +51,21 @@ public class TableManager {
         return Optional.ofNullable(tables.get(tableId));
     }
 
+    public Optional<GameTable> getTableBySpectator(Player player) {
+        UUID tableId = spectatorToTable.get(player.getUniqueId());
+        if (tableId == null) {
+            return Optional.empty();
+        }
+        return Optional.ofNullable(tables.get(tableId));
+    }
+
     public GameTable createTable(Player owner) {
         GameTable table = new GameTable(plugin);
         String code = generateRoomCode();
         table.enableRoom(owner, code);
         tables.put(table.getId(), table);
         roomCodeToTable.put(code.toUpperCase(Locale.ROOT), table.getId());
+        callEvent(new MahjongTableCreateEvent(table, owner));
         joinTable(owner, table.getId());
         return table;
     }
@@ -159,6 +173,13 @@ public class TableManager {
         if (playerToTable.containsKey(player.getUniqueId())) {
             return false;
         }
+        UUID spectatorTableId = spectatorToTable.remove(player.getUniqueId());
+        if (spectatorTableId != null) {
+            GameTable spectatorTable = tables.get(spectatorTableId);
+            if (spectatorTable != null) {
+                spectatorTable.removeSpectator(player);
+            }
+        }
         GameTable table = tables.get(tableId);
         if (table == null) {
             return false;
@@ -168,6 +189,28 @@ public class TableManager {
         }
         playerToTable.put(player.getUniqueId(), tableId);
         applyResourcePack(player);
+        callEvent(new MahjongTableJoinEvent(table, player, false));
+        return true;
+    }
+
+    public boolean spectateTable(Player player, UUID tableId) {
+        if (player == null) {
+            return false;
+        }
+        UUID playerId = player.getUniqueId();
+        if (playerToTable.containsKey(playerId) || spectatorToTable.containsKey(playerId)) {
+            return false;
+        }
+        GameTable table = tables.get(tableId);
+        if (table == null) {
+            return false;
+        }
+        if (!table.addSpectator(player)) {
+            return false;
+        }
+        spectatorToTable.put(playerId, tableId);
+        applyResourcePack(player);
+        callEvent(new MahjongTableJoinEvent(table, player, true));
         return true;
     }
 
@@ -193,13 +236,24 @@ public class TableManager {
     public boolean leaveTable(Player player) {
         UUID tableId = playerToTable.remove(player.getUniqueId());
         if (tableId == null) {
-            return false;
+            UUID spectatorId = spectatorToTable.remove(player.getUniqueId());
+            if (spectatorId == null) {
+                return false;
+            }
+            GameTable spectatorTable = tables.get(spectatorId);
+            if (spectatorTable != null) {
+                spectatorTable.removeSpectator(player);
+                callEvent(new MahjongTableLeaveEvent(spectatorTable, player, true, false));
+            }
+            return true;
         }
         GameTable table = tables.get(tableId);
         if (table == null) {
             return false;
         }
         table.removePlayer(player);
+        boolean replacedByBot = table.isBot(player.getUniqueId());
+        callEvent(new MahjongTableLeaveEvent(table, player, false, replacedByBot));
         if (table.isEmpty()) {
             table.shutdown();
             tables.remove(tableId);
@@ -221,6 +275,11 @@ public class TableManager {
         for (UUID playerId : table.getPlayers()) {
             playerToTable.remove(playerId);
         }
+        for (UUID spectatorId : new ArrayList<>(spectatorToTable.keySet())) {
+            if (tableId.equals(spectatorToTable.get(spectatorId))) {
+                spectatorToTable.remove(spectatorId);
+            }
+        }
         table.shutdown();
         return true;
     }
@@ -231,7 +290,12 @@ public class TableManager {
         }
         tables.clear();
         playerToTable.clear();
+        spectatorToTable.clear();
         roomCodeToTable.clear();
+    }
+
+    private void callEvent(Event event) {
+        plugin.getServer().getPluginManager().callEvent(event);
     }
 
     private void removeRoomCode(GameTable table) {

@@ -13,7 +13,8 @@ ai:
   debug: false
 timers:
   callWindowSeconds: 5
-  turnSeconds: 20
+  turnByoyomiSeconds: 5
+  turnExtraSeconds: 20
   nextHandDelaySeconds: 5
 round:
   startingPoints: 25000
@@ -26,6 +27,8 @@ ui:
   enableDialogs: false
   confirmDiscard: false
   roomGui: true
+  world:
+    compactDiscards: true
 scoring:
   riichiStick: 1000
   honbaRonBonus: 300

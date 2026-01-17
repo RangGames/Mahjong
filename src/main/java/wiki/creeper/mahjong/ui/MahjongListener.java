@@ -9,6 +9,7 @@ import org.bukkit.event.player.PlayerQuitEvent;
 import org.bukkit.inventory.Inventory;
 import org.bukkit.inventory.InventoryHolder;
 import org.bukkit.inventory.ItemStack;
+import wiki.creeper.mahjong.ai.BotDifficulty;
 import wiki.creeper.mahjong.game.SeatWind;
 import wiki.creeper.mahjong.table.GameTable;
 import wiki.creeper.mahjong.table.TableManager;
@@ -75,6 +76,10 @@ public class MahjongListener implements Listener {
             handleRulesMenuClick(table, player, slot);
             return;
         }
+        if (type == RoomMenuType.BOTS) {
+            handleBotsMenuClick(table, player, slot);
+            return;
+        }
         switch (slot) {
             case RoomInventory.SLOT_LOBBY_EAST:
                 table.requestSeat(player, SeatWind.EAST);
@@ -96,6 +101,9 @@ public class MahjongListener implements Listener {
                 break;
             case RoomInventory.SLOT_LOBBY_RULES:
                 table.showRoomRules(player);
+                break;
+            case RoomInventory.SLOT_LOBBY_BOTS:
+                table.showRoomBots(player);
                 break;
             case RoomInventory.SLOT_LOBBY_LEAVE:
                 tableManager.leaveTable(player);
@@ -161,5 +169,48 @@ public class MahjongListener implements Listener {
             default:
                 break;
         }
+    }
+
+    private void handleBotsMenuClick(GameTable table, Player player, int slot) {
+        if (slot == RoomInventory.SLOT_BOTS_BACK) {
+            table.openRoomLobbyGui(player);
+            return;
+        }
+        boolean actionable = slot == RoomInventory.SLOT_BOTS_ADD_BEGINNER
+                || slot == RoomInventory.SLOT_BOTS_ADD_NORMAL
+                || slot == RoomInventory.SLOT_BOTS_ADD_HARD
+                || slot == RoomInventory.SLOT_BOTS_REMOVE_BEGINNER
+                || slot == RoomInventory.SLOT_BOTS_REMOVE_NORMAL
+                || slot == RoomInventory.SLOT_BOTS_REMOVE_HARD;
+        if (!actionable) {
+            return;
+        }
+        if (!table.isHost(player.getUniqueId())) {
+            player.sendMessage("호스트만 봇을 초대할 수 있어요.");
+            return;
+        }
+        switch (slot) {
+            case RoomInventory.SLOT_BOTS_ADD_BEGINNER:
+                table.addBot(BotDifficulty.BEGINNER);
+                break;
+            case RoomInventory.SLOT_BOTS_ADD_NORMAL:
+                table.addBot(BotDifficulty.NORMAL);
+                break;
+            case RoomInventory.SLOT_BOTS_ADD_HARD:
+                table.addBot(BotDifficulty.HARD);
+                break;
+            case RoomInventory.SLOT_BOTS_REMOVE_BEGINNER:
+                table.removeBot(BotDifficulty.BEGINNER);
+                break;
+            case RoomInventory.SLOT_BOTS_REMOVE_NORMAL:
+                table.removeBot(BotDifficulty.NORMAL);
+                break;
+            case RoomInventory.SLOT_BOTS_REMOVE_HARD:
+                table.removeBot(BotDifficulty.HARD);
+                break;
+            default:
+                break;
+        }
+        table.openRoomBotsGui(player);
     }
 }

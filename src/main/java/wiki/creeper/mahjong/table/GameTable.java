@@ -32,11 +32,19 @@ import org.bukkit.boss.BarColor;
 import org.bukkit.boss.BarStyle;
 import org.bukkit.boss.BossBar;
 import org.bukkit.entity.Player;
+import org.bukkit.event.Event;
 import org.bukkit.inventory.Inventory;
 import org.bukkit.inventory.ItemStack;
 import org.bukkit.inventory.meta.ItemMeta;
 import org.bukkit.plugin.java.JavaPlugin;
 import org.bukkit.scheduler.BukkitTask;
+import wiki.creeper.mahjong.api.event.MahjongCallEvent;
+import wiki.creeper.mahjong.api.event.MahjongDiscardEvent;
+import wiki.creeper.mahjong.api.event.MahjongGameStartEvent;
+import wiki.creeper.mahjong.api.event.MahjongHandEndEvent;
+import wiki.creeper.mahjong.api.event.MahjongHandStartEvent;
+import wiki.creeper.mahjong.api.event.MahjongRiichiEvent;
+import wiki.creeper.mahjong.api.event.MahjongWinEvent;
 import wiki.creeper.mahjong.ai.BotAction;
 import wiki.creeper.mahjong.ai.BotController;
 import wiki.creeper.mahjong.ai.BotDecision;
@@ -82,6 +90,7 @@ public class GameTable {
     private final JavaPlugin plugin;
     private final GameQueue queue = new GameQueue();
     private final List<UUID> players = new ArrayList<>(MAX_PLAYERS);
+    private final Set<UUID> spectators = new HashSet<>();
     private final Map<UUID, HandInventory> handInventories = new HashMap<>();
     private final UiManager uiManager;
     private final WorldUiManager worldUi;
@@ -118,6 +127,8 @@ public class GameTable {
     private BukkitTask botCallTask;
     private int lastLoggedDrawSequence;
     private int turnSecondsRemaining = -1;
+    private int turnByoyomiRemaining = -1;
+    private final Map<UUID, Integer> turnExtraSeconds = new HashMap<>();
     private int callSecondsRemaining = -1;
     private boolean botsEnabled;
     private boolean coachEnabled;
@@ -219,6 +230,10 @@ public class GameTable {
         return Collections.unmodifiableList(players);
     }
 
+    public Set<UUID> getSpectators() {
+        return Collections.unmodifiableSet(spectators);
+    }
+
     public boolean isRoomMode() {
         return roomMode;
     }
@@ -272,7 +287,7 @@ public class GameTable {
         return coachRankDisabled;
     }
 
-    boolean isBot(UUID playerId) {
+    public boolean isBot(UUID playerId) {
         return playerId != null && bots.containsKey(playerId);
     }
 
@@ -295,8 +310,16 @@ public class GameTable {
         roomUi.openRoomRulesGui(player);
     }
 
+    public void openRoomBotsGui(Player player) {
+        roomUi.openRoomBotsGui(player);
+    }
+
     public void showRoomRules(Player player) {
         roomUi.showRoomRules(player);
+    }
+
+    public void showRoomBots(Player player) {
+        roomUi.showRoomBots(player);
     }
 
     public void showRoomLobby(Player player) {
@@ -441,9 +464,11 @@ public class GameTable {
         if (players.contains(playerId)) {
             return false;
         }
+        spectators.remove(playerId);
         boolean added = players.add(playerId);
         if (added) {
             displayNameCache.put(playerId, player.getName());
+            turnExtraSeconds.putIfAbsent(playerId, loadTurnExtraSeconds());
             readyPlayers.remove(playerId);
             if (worldUi.isSpawned()) {
                 worldUi.hideHandDisplaysFor(player);
@@ -457,13 +482,35 @@ public class GameTable {
         return added;
     }
 
-    public boolean removePlayer(Player player) {
-        UUID playerId = player.getUniqueId();
-        boolean removed = players.remove(playerId);
-        if (!removed) {
+    public boolean addSpectator(Player player) {
+        if (player == null) {
             return false;
         }
+        UUID playerId = player.getUniqueId();
+        if (players.contains(playerId)) {
+            return false;
+        }
+        if (!spectators.add(playerId)) {
+            return false;
+        }
+        displayNameCache.put(playerId, player.getName());
+        if (worldUi.isSpawned()) {
+            worldUi.hideHandDisplaysFor(player);
+        }
+        return true;
+    }
+
+    public boolean removePlayer(Player player) {
+        UUID playerId = player.getUniqueId();
+        if (!players.contains(playerId)) {
+            return false;
+        }
+        if (state != GameState.LOBBY && engine != null && !isBot(playerId)) {
+            return replaceWithBot(player);
+        }
+        boolean removed = players.remove(playerId);
         readyPlayers.remove(playerId);
+        turnExtraSeconds.remove(playerId);
         if (worldUi.isSpawned()) {
             worldUi.clearHandDisplay(playerId);
         }
@@ -489,6 +536,57 @@ public class GameTable {
             }
             updateRoomLobbyUi();
         }
+        return true;
+    }
+
+    public boolean removeSpectator(Player player) {
+        if (player == null) {
+            return false;
+        }
+        UUID playerId = player.getUniqueId();
+        boolean removed = spectators.remove(playerId);
+        if (removed) {
+            displayNameCache.remove(playerId);
+        }
+        return removed;
+    }
+
+    private boolean replaceWithBot(Player player) {
+        UUID playerId = player.getUniqueId();
+        String name = resolveName(playerId);
+        String botName = name + " (봇)";
+        if (!isBot(playerId)) {
+            long seed = ThreadLocalRandom.current().nextLong();
+            BotProfile profile = new BotProfile(playerId, BotDifficulty.NORMAL, seed, botName);
+            bots.put(playerId, profile);
+        }
+        spectators.remove(playerId);
+        displayNameCache.put(playerId, botName);
+        readyPlayers.remove(playerId);
+        turnExtraSeconds.remove(playerId);
+        handInventories.remove(playerId);
+        coachPlayers.remove(playerId);
+        coachAdviceCache.remove(playerId);
+        clearCoachOverlay(playerId);
+        cancelReplay(playerId);
+        if (callBossBar != null) {
+            callBossBar.removePlayer(player);
+        }
+        if (worldUi.isSpawned()) {
+            worldUi.clearHandDisplay(playerId);
+        }
+        dialogs.closeDialog(player);
+        if (player.isOnline()) {
+            player.closeInventory();
+        }
+        if (playerId.equals(turnTimerPlayer)) {
+            cancelTurnTimer();
+        }
+        if (engine != null && playerId.equals(engine.getActivePlayer())) {
+            scheduleBotTurn(playerId);
+        }
+        broadcast(name + " 님이 나가서 봇이 대신 플레이해요.");
+        updateWorldUi();
         return true;
     }
 
@@ -670,8 +768,11 @@ public class GameTable {
         long seed = System.currentTimeMillis();
         this.engine = new GameEngine(players, startingPoints, rules, seed);
         this.engine.startRound();
+        resetTurnExtraSeconds();
         logGameStart(seed);
         logHandStart();
+        callEvent(new MahjongGameStartEvent(this, seed, rules, engine.getRoundState()));
+        callEvent(new MahjongHandStartEvent(this, engine.getRoundState()));
         cacheState();
         state = engine.getState();
         clearRoomBossBar();
@@ -713,12 +814,14 @@ public class GameTable {
         long seed = System.currentTimeMillis();
         this.engine = new GameEngine(players, playerStates, roundState, rules, seed);
         this.engine.startRound();
+        resetTurnExtraSeconds();
         lastLoggedDrawSequence = 0;
         cancelAllReplays();
         cancelAllBotTurns();
         cancelBotCalls();
         coachAdviceCache.clear();
         logHandStart();
+        callEvent(new MahjongHandStartEvent(this, engine.getRoundState()));
         ensureWorldUi();
         worldUi.clearHandResult();
         openHands();
@@ -735,9 +838,6 @@ public class GameTable {
 
     private void requestNextHandInternal(Player player) {
         if (engine == null || engine.getState() != GameState.HAND_END) {
-            if (player != null) {
-                player.sendMessage("다음 핸드를 시작할 수 없어요. 현재 핸드가 아직 끝나지 않았어요.");
-            }
             return;
         }
         if (players.size() < MAX_PLAYERS) {
@@ -894,6 +994,7 @@ public class GameTable {
         coachAdviceCache.clear();
         clearCoachOverlays();
         worldUi.remove();
+        spectators.clear();
     }
 
     private void resetToLobby() {
@@ -980,10 +1081,6 @@ public class GameTable {
     }
 
     private void requestDiscardInternal(Player player, ItemStack item) {
-        if (!dialogs.shouldConfirmDiscard()) {
-            handleDiscardInternal(player, item);
-            return;
-        }
         if (engine == null) {
             player.sendMessage("게임이 아직 시작되지 않았어요.");
             return;
@@ -1007,14 +1104,15 @@ public class GameTable {
             player.sendMessage("해당 패는 버릴 수 없어요.");
             return;
         }
+        dialogs.showDiscardPreview(player, tile.get());
+        if (!dialogs.shouldConfirmDiscard()) {
+            handleDiscardInternal(player, item);
+            return;
+        }
         dialogs.showDiscardConfirmDialog(player, tile.get(), item);
     }
 
     private void requestDiscardInternal(Player player, int instanceId) {
-        if (!dialogs.shouldConfirmDiscard()) {
-            handleDiscardInternal(player, instanceId);
-            return;
-        }
         if (engine == null) {
             player.sendMessage("게임이 아직 시작되지 않았어요.");
             return;
@@ -1038,7 +1136,12 @@ public class GameTable {
             player.sendMessage("해당 패는 버릴 수 없어요.");
             return;
         }
+        dialogs.showDiscardPreview(player, tile);
         ItemStack payload = uiManager.createTileItem(tile);
+        if (!dialogs.shouldConfirmDiscard()) {
+            handleDiscardInternal(player, instanceId);
+            return;
+        }
         dialogs.showDiscardConfirmDialog(player, tile, payload);
     }
 
@@ -1101,15 +1204,20 @@ public class GameTable {
         cancelTurnTimer();
         dialogs.closeDialog(player);
         eventLogger.record(new GameEvent(id, playerId, GameEventType.DISCARD, dialogs.buildTilePayload(tile)));
+        callEvent(new MahjongDiscardEvent(this, playerId, player, tile));
         lastAction = "DISCARD";
         updateHand(playerId, false);
-        broadcast(player.getName() + " 님이 " + tile.getId().toShortString() + "을(를) 버렸어요.");
+        broadcast(player.getName() + " 님이 " + tile.getId().toDisplayString() + "을(를) 버렸어요.");
         notifyCoachAfterDiscard(playerId, tile);
         updateWorldUi();
         int seconds = plugin.getConfig().getInt("timers.callWindowSeconds", 5);
-        notifyCallOptions(seconds);
-        scheduleCallResolution();
-        updateWorldUiActions(seconds);
+        boolean hasCall = notifyCallOptions(seconds);
+        if (hasCall) {
+            scheduleCallResolution();
+            updateWorldUiActions(seconds);
+        } else {
+            resolveCallWindow();
+        }
     }
 
     private void requestRonInternal(Player player) {
@@ -1240,6 +1348,7 @@ public class GameTable {
         dialogs.closeDialog(player);
         KanOption option = options.get(optionIndex - 1);
         eventLogger.record(new GameEvent(id, playerId, GameEventType.CALL, dialogs.buildKanPayload(option)));
+        callEvent(new MahjongCallEvent(this, playerId, player, CallType.KAN, option.getTiles(), null, true));
         broadcast(player.getName() + " 님이 깡을 선언했어요.");
         updateHand(playerId, true);
         broadcastDoraIndicators();
@@ -1262,6 +1371,7 @@ public class GameTable {
         }
         dialogs.closeDialog(player);
         eventLogger.record(new GameEvent(id, playerId, GameEventType.RIICHI, "state=declare"));
+        callEvent(new MahjongRiichiEvent(this, playerId, player));
         lastAction = "RIICHI";
         broadcast(player.getName() + " 님이 리치를 선언했어요.");
         updateWorldUi();
@@ -1378,6 +1488,17 @@ public class GameTable {
             lastAction = "NO_CALL";
         }
         updateFuritenWarnings();
+        if (resolved != null) {
+            List<Tile> callTiles = new ArrayList<>(resolved.getTiles());
+            if (lastDiscard != null && resolved.getType() != CallType.RON) {
+                callTiles.add(lastDiscard);
+            } else if (lastDiscard != null && resolved.getType() == CallType.RON && callTiles.isEmpty()) {
+                callTiles.add(lastDiscard);
+            }
+            Player caller = plugin.getServer().getPlayer(resolved.getPlayerId());
+            callEvent(new MahjongCallEvent(this, resolved.getPlayerId(), caller, resolved.getType(),
+                    callTiles, lastDiscarder, false));
+        }
         if (engine.getState() == GameState.HAND_END) {
             endHand();
             return;
@@ -1445,6 +1566,14 @@ public class GameTable {
         Map<UUID, Integer> deltas = computePointDeltas(beforePoints, afterPoints);
         HandResult result = new HandResult(winner, discarder, engine.isTsumoWin(), score, tenpaiPlayers,
                 deltas, afterPoints, honbaApplied, riichiPotApplied, isGameOver(), engine.getRoundState());
+        callEvent(new MahjongHandEndEvent(this, winner, discarder, engine.isTsumoWin(), score, tenpaiPlayers,
+                deltas, afterPoints, honbaApplied, riichiPotApplied, result.gameOver, result.nextRound));
+        if (winner != null) {
+            Player winnerPlayer = plugin.getServer().getPlayer(winner);
+            Player discarderPlayer = discarder != null ? plugin.getServer().getPlayer(discarder) : null;
+            callEvent(new MahjongWinEvent(this, winner, winnerPlayer, discarder, discarderPlayer,
+                    engine.isTsumoWin(), score));
+        }
         dialogs.updateWorldHandResult(result);
         if (dialogs.isEnabled()) {
             dialogs.showHandResultDialogs(result);
@@ -1509,9 +1638,21 @@ public class GameTable {
         }
         Player player = plugin.getServer().getPlayer(playerId);
         if (player != null) {
-            int turnSeconds = plugin.getConfig().getInt("timers.turnSeconds", 20);
-            if (turnSeconds > 0) {
-                player.sendMessage("내 차례예요. " + turnSeconds + "초 안에 버릴 패를 골라 주세요. 시간이 지나면 자동으로 버려요.");
+            int byoyomiSeconds = loadTurnByoyomiSeconds();
+            int extraRemaining = getTurnExtraSeconds(playerId);
+            if (byoyomiSeconds > 0 || extraRemaining > 0) {
+                StringBuilder message = new StringBuilder("내 차례예요. ");
+                if (byoyomiSeconds > 0) {
+                    message.append("기본 ").append(byoyomiSeconds).append("초");
+                }
+                if (extraRemaining > 0) {
+                    if (byoyomiSeconds > 0) {
+                        message.append(" + ");
+                    }
+                    message.append("추가 ").append(extraRemaining).append("초");
+                }
+                message.append(" 안에 버릴 패를 골라 주세요. 시간이 지나면 자동으로 버려요.");
+                player.sendMessage(message.toString());
             } else {
                 player.sendMessage("내 차례예요. 버릴 패를 골라 주세요.");
             }
@@ -1575,7 +1716,7 @@ public class GameTable {
         CoachSuggestion best = advice.getSuggestions().get(0);
         Player player = plugin.getServer().getPlayer(playerId);
         if (player != null) {
-            player.sendMessage("코치: 추천 1순위는 " + best.getDiscard().toShortString()
+            player.sendMessage("코치: 추천 1순위는 " + best.getDiscard().toDisplayString()
                     + " (샹텐 " + best.getShanten() + ", 유효패 " + best.getUkeire() + ").");
         }
         showCoachMissOverlay(playerId, best);
@@ -1592,7 +1733,7 @@ public class GameTable {
             if (i > 0) {
                 sb.append(", ");
             }
-            sb.append(suggestion.getDiscard().toShortString())
+            sb.append(suggestion.getDiscard().toDisplayString())
                     .append(" (샹텐 ").append(suggestion.getShanten())
                     .append(", 유효패 ").append(suggestion.getUkeire()).append(")");
         }
@@ -1628,7 +1769,7 @@ public class GameTable {
         CoachSuggestion best = advice.getSuggestions().get(0);
         StringBuilder sb = new StringBuilder();
         sb.append("코치: 추천 버림패 ")
-                .append(best.getDiscard().toShortString())
+                .append(best.getDiscard().toDisplayString())
                 .append(" (샹텐 ").append(best.getShanten())
                 .append(", 유효패 ").append(best.getUkeire()).append(")");
         if (advice.isRiichiAvailable()) {
@@ -1638,7 +1779,7 @@ public class GameTable {
     }
 
     private String buildCoachMissText(CoachSuggestion best) {
-        return "코치: 추천 1순위 " + best.getDiscard().toShortString()
+        return "코치: 추천 1순위 " + best.getDiscard().toDisplayString()
                 + " (샹텐 " + best.getShanten() + ", 유효패 " + best.getUkeire() + ")";
     }
 
@@ -1746,6 +1887,7 @@ public class GameTable {
         }
         if (decision.isDeclareRiichi() && engine.declareRiichi(playerId)) {
             eventLogger.record(new GameEvent(id, playerId, GameEventType.RIICHI, "state=declare"));
+            callEvent(new MahjongRiichiEvent(this, playerId, null));
             lastAction = "RIICHI";
             broadcast(resolveName(playerId) + " 님이 리치를 선언했어요.");
             updateWorldUi();
@@ -1769,15 +1911,19 @@ public class GameTable {
         }
         cancelTurnTimer();
         eventLogger.record(new GameEvent(id, playerId, GameEventType.DISCARD, dialogs.buildTilePayload(tile)));
+        callEvent(new MahjongDiscardEvent(this, playerId, null, tile));
         lastAction = "DISCARD";
         updateHand(playerId, false);
-        broadcast(resolveName(playerId) + " 님이 " + tile.getId().toShortString() + "을(를) 버렸어요.");
+        broadcast(resolveName(playerId) + " 님이 " + tile.getId().toDisplayString() + "을(를) 버렸어요.");
         updateWorldUi();
         int seconds = plugin.getConfig().getInt("timers.callWindowSeconds", 5);
-
-        notifyCallOptions(seconds);
-        scheduleCallResolution();
-        updateWorldUiActions(seconds);
+        boolean hasCall = notifyCallOptions(seconds);
+        if (hasCall) {
+            scheduleCallResolution();
+            updateWorldUiActions(seconds);
+        } else {
+            resolveCallWindow();
+        }
         return true;
     }
 
@@ -1825,14 +1971,17 @@ public class GameTable {
             player.sendMessage("시간이 초과되어 자동으로 버렸어요.");
             dialogs.closeDialog(player);
         }
-        broadcast(resolveName(playerId) + " 님이 " + tile.getId().toShortString() + "을(를) 버렸어요.");
+        broadcast(resolveName(playerId) + " 님이 " + tile.getId().toDisplayString() + "을(를) 버렸어요.");
         notifyCoachAfterDiscard(playerId, tile);
         updateWorldUi();
         int seconds = plugin.getConfig().getInt("timers.callWindowSeconds", 5);
-
-        notifyCallOptions(seconds);
-        scheduleCallResolution();
-        updateWorldUiActions(seconds);
+        boolean hasCall = notifyCallOptions(seconds);
+        if (hasCall) {
+            scheduleCallResolution();
+            updateWorldUiActions(seconds);
+        } else {
+            resolveCallWindow();
+        }
     }
 
     private void scheduleBotCalls(int callWindowSeconds) {
@@ -2355,26 +2504,41 @@ public class GameTable {
         return engine.getRoundState().getRoundIndex() > maxWind.order();
     }
 
-    private void notifyCallOptions(int callWindowSeconds) {
-        if (engine == null || engine.getState() != GameState.CALL_WINDOW) {     
-            return;
+    private boolean notifyCallOptions(int callWindowSeconds) {
+        if (engine == null || engine.getState() != GameState.CALL_WINDOW) {
+            return false;
         }
+        boolean anyCall = false;
         for (UUID playerId : players) {
             if (playerId.equals(engine.getLastDiscarder())) {
                 continue;
+            }
+            List<CallOption> choices = resolveCallChoices(playerId);
+            if (!choices.isEmpty()) {
+                anyCall = true;
             }
             Player player = plugin.getServer().getPlayer(playerId);
             if (player == null) {
                 continue;
             }
-            List<CallOption> choices = resolveCallChoices(playerId);
             if (choices.isEmpty()) {
                 continue;
             }
             List<String> options = resolveCallOptions(playerId, player);
+            if (options.isEmpty()) {
+                continue;
+            }
+            String message = "가능한 행동: " + String.join("/", options);
+            if (callWindowSeconds >= 0) {
+                message += " (" + callWindowSeconds + "초)";
+            }
+            player.sendMessage(message);
             dialogs.showCallPopup(player, options, callWindowSeconds);
         }
-        scheduleBotCalls(callWindowSeconds);
+        if (anyCall) {
+            scheduleBotCalls(callWindowSeconds);
+        }
+        return anyCall;
     }
 
     private String callName(CallType type) {
@@ -2758,6 +2922,16 @@ public class GameTable {
                 player.sendMessage(message);
             }
         }
+        for (UUID playerId : spectators) {
+            Player player = plugin.getServer().getPlayer(playerId);
+            if (player != null) {
+                player.sendMessage(message);
+            }
+        }
+    }
+
+    private void callEvent(Event event) {
+        Bukkit.getPluginManager().callEvent(event);
     }
 
     private void broadcastDoraIndicators() {
@@ -2771,10 +2945,40 @@ public class GameTable {
             if (i > 0) {
                 sb.append(", ");
             }
-            sb.append(indicators.get(i).getId().toShortString());
+            sb.append(indicators.get(i).getId().toDisplayString());
         }
         broadcast(sb.toString());
         worldUi.updateDora(this);
+    }
+
+    private int loadTurnByoyomiSeconds() {
+        int seconds = plugin.getConfig().getInt("timers.turnByoyomiSeconds", 5);
+        return Math.max(0, seconds);
+    }
+
+    private int loadTurnExtraSeconds() {
+        int seconds = plugin.getConfig().getInt("timers.turnExtraSeconds", 20);
+        return Math.max(0, seconds);
+    }
+
+    private void resetTurnExtraSeconds() {
+        int extra = loadTurnExtraSeconds();
+        turnExtraSeconds.clear();
+        for (UUID playerId : players) {
+            turnExtraSeconds.put(playerId, extra);
+        }
+    }
+
+    private int getTurnExtraSeconds(UUID playerId) {
+        if (playerId == null) {
+            return 0;
+        }
+        Integer value = turnExtraSeconds.get(playerId);
+        if (value == null) {
+            value = loadTurnExtraSeconds();
+            turnExtraSeconds.put(playerId, value);
+        }
+        return value;
     }
 
     private void startTurnTimer(UUID playerId) {
@@ -2785,48 +2989,71 @@ public class GameTable {
         if (engine.getState() != GameState.TURN_DISCARD) {
             return;
         }
-        int seconds = plugin.getConfig().getInt("timers.turnSeconds", 20);
-        if (seconds <= 0) {
+        int byoyomiSeconds = loadTurnByoyomiSeconds();
+        int extraSeconds = getTurnExtraSeconds(playerId);
+        int totalSeconds = byoyomiSeconds + extraSeconds;
+        if (totalSeconds <= 0) {
             return;
         }
         Player player = plugin.getServer().getPlayer(playerId);
         if (player == null) {
             return;
         }
-        turnSecondsRemaining = seconds;
+        turnByoyomiRemaining = byoyomiSeconds;
+        turnSecondsRemaining = totalSeconds;
         turnTimerPlayer = playerId;
-        turnBossBar = Bukkit.createBossBar("내 차례: " + seconds + "초", BarColor.GREEN, BarStyle.SOLID);
+        turnBossBar = Bukkit.createBossBar(buildTurnBossBarTitle(byoyomiSeconds, extraSeconds),
+                BarColor.GREEN, BarStyle.SOLID);
         turnBossBar.addPlayer(player);
         turnBossBar.setProgress(1.0);
         turnBossBar.setVisible(true);
         turnBossBarTask = Bukkit.getScheduler().runTaskTimer(plugin, new Runnable() {
-            private int remaining = seconds;
+            private int byoyomiRemaining = byoyomiSeconds;
+            private int extraRemaining = extraSeconds;
 
             @Override
             public void run() {
-                remaining--;
-                if (remaining <= 0) {
+                if (byoyomiRemaining > 0) {
+                    byoyomiRemaining--;
+                } else if (extraRemaining > 0) {
+                    extraRemaining--;
+                    turnExtraSeconds.put(playerId, extraRemaining);
+                } else {
                     cancelTurnTimer();
                     queue.enqueue(() -> forceRandomDiscard(playerId));
                     return;
                 }
-                turnSecondsRemaining = remaining;
-                updateTurnBossBar(remaining, seconds);
+                turnByoyomiRemaining = byoyomiRemaining;
+                turnSecondsRemaining = byoyomiRemaining + extraRemaining;
+                updateTurnBossBar(byoyomiRemaining, extraRemaining, totalSeconds);
                 updateWorldUiActions(-1);
             }
         }, 20L, 20L);
     }
 
-    private void updateTurnBossBar(int remaining, int total) {
+    private void updateTurnBossBar(int byoyomiRemaining, int extraRemaining, int total) {
         if (turnBossBar == null) {
             return;
         }
-        turnBossBar.setTitle("내 차례: " + remaining + "초");
-        turnBossBar.setProgress(Math.max(0.0, Math.min(1.0, remaining / (double) total)));
+        turnBossBar.setTitle(buildTurnBossBarTitle(byoyomiRemaining, extraRemaining));
+        int remaining = Math.max(0, byoyomiRemaining + extraRemaining);
+        if (total > 0) {
+            turnBossBar.setProgress(Math.max(0.0, Math.min(1.0, remaining / (double) total)));
+        } else {
+            turnBossBar.setProgress(0.0);
+        }
+    }
+
+    private String buildTurnBossBarTitle(int byoyomiRemaining, int extraRemaining) {
+        if (extraRemaining > 0) {
+            return "내 차례: 기본 " + Math.max(0, byoyomiRemaining) + "초 + 추가 " + extraRemaining + "초";
+        }
+        return "내 차례: " + Math.max(0, byoyomiRemaining) + "초";
     }
 
     private void cancelTurnTimer() {
         turnSecondsRemaining = -1;
+        turnByoyomiRemaining = -1;
         turnTimerPlayer = null;
         if (turnBossBarTask != null) {
             turnBossBarTask.cancel();
@@ -2886,7 +3113,7 @@ public class GameTable {
         if (targets.isEmpty()) {
             return;
         }
-        callBossBar = Bukkit.createBossBar("울기 선택: " + seconds + "초", BarColor.YELLOW, BarStyle.SOLID);
+        callBossBar = Bukkit.createBossBar("행동 선택: " + seconds + "초", BarColor.YELLOW, BarStyle.SOLID);
         for (Player player : targets) {
             callBossBar.addPlayer(player);
         }
@@ -2903,7 +3130,7 @@ public class GameTable {
                     return;
                 }
                 callSecondsRemaining = remaining;
-                callBossBar.setTitle("울기 선택: " + remaining + "초");
+                callBossBar.setTitle("행동 선택: " + remaining + "초");
                 callBossBar.setProgress(Math.max(0.0, Math.min(1.0, remaining / (double) seconds)));
                 updateWorldUiActions(remaining);
                 dialogs.updateCallPopups(remaining);

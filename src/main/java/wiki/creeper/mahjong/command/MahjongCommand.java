@@ -92,6 +92,41 @@ public class MahjongCommand implements CommandExecutor, TabCompleter {
                     player.sendMessage("테이블 입장에 실패했어요. 다시 시도해 주세요.");
                 }
                 return true;
+            case "spectate":
+            case "watch":
+                if (tableManager.getTableByPlayer(player).isPresent()) {
+                    player.sendMessage("이미 다른 테이블에 참여 중이에요. 먼저 나간 뒤 다시 시도해 주세요.");
+                    return true;
+                }
+                if (tableManager.getTableBySpectator(player).isPresent()) {
+                    player.sendMessage("이미 다른 테이블을 관전 중이에요. 먼저 나간 뒤 다시 시도해 주세요.");
+                    return true;
+                }
+                if (args.length < 2) {
+                    player.sendMessage("사용법: /mj spectate <테이블 코드|tableId>");
+                    return true;
+                }
+                String spectateKey = args[1];
+                GameTable spectateTarget = tableManager.getRoomByCode(spectateKey).orElse(null);
+                if (spectateTarget == null) {
+                    Optional<UUID> tableId = resolveTableId(spectateKey);
+                    if (tableId.isPresent()) {
+                        spectateTarget = tableManager.getTable(tableId.get()).orElse(null);
+                    }
+                }
+                if (spectateTarget == null) {
+                    player.sendMessage("테이블을 찾을 수 없어요: " + spectateKey);
+                    return true;
+                }
+                if (tableManager.spectateTable(player, spectateTarget.getId())) {
+                    String code = spectateTarget.getRoomCode();
+                    String labelText = code != null ? "코드: " + code : "ID: " + spectateTarget.getId();
+                    player.sendMessage("관전 모드로 입장했어요. " + labelText);
+                    player.sendMessage("나가기: /mj leave");
+                } else {
+                    player.sendMessage("관전 입장에 실패했어요. 다시 시도해 주세요.");
+                }
+                return true;
             case "leave":
                 if (tableManager.leaveTable(player)) {
                     player.sendMessage("테이블에서 나왔어요.");
@@ -286,6 +321,8 @@ public class MahjongCommand implements CommandExecutor, TabCompleter {
             subs.add("room");
             subs.add("table");
             subs.add("join");
+            subs.add("spectate");
+            subs.add("watch");
             subs.add("leave");
             subs.add("start");
             subs.add("hand");
@@ -326,6 +363,16 @@ public class MahjongCommand implements CommandExecutor, TabCompleter {
             return List.of("on", "off");
         }
         if (args.length == 2 && "join".equalsIgnoreCase(args[0])) {
+            List<String> ids = new ArrayList<>();
+            for (GameTable t : tableManager.getTables()) {
+                if (t.getRoomCode() != null) {
+                    ids.add(t.getRoomCode());
+                }
+                ids.add(t.getId().toString());
+            }
+            return ids;
+        }
+        if (args.length == 2 && ("spectate".equalsIgnoreCase(args[0]) || "watch".equalsIgnoreCase(args[0]))) {
             List<String> ids = new ArrayList<>();
             for (GameTable t : tableManager.getTables()) {
                 if (t.getRoomCode() != null) {
@@ -631,10 +678,10 @@ public class MahjongCommand implements CommandExecutor, TabCompleter {
 
     private void sendUsage(Player player) {
         player.sendMessage("마작 도움말");
-        player.sendMessage("테이블: /mj table (GUI) | /mj create | /mj join <코드|tableId> | /mj leave | /mj start");
+        player.sendMessage("테이블: /mj table (GUI) | /mj create | /mj join <코드|tableId> | /mj spectate <코드|tableId> | /mj leave | /mj start");
         player.sendMessage("로비 설정: /mj table ready | /mj table rules | /mj table status");
         player.sendMessage("플레이: /mj hand | /mj ron | /mj tsumo | /mj riichi");
-        player.sendMessage("울기: /mj chi [번호] | /mj pon | /mj kan [번호]");
+        player.sendMessage("호출: /mj chi [번호] | /mj pon | /mj kan [번호]");
         player.sendMessage("진행: /mj nexthand");
         player.sendMessage("도구: /mj info | /mj list | /mj log export | /mj log replay [ticks]");
         player.sendMessage("관리: /mj bot add|remove <BEGINNER|NORMAL|HARD> | /mj coach on|off | /mj disband <tableId>");

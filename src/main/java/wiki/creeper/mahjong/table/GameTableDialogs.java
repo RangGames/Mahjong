@@ -19,13 +19,23 @@ import net.kyori.adventure.text.format.NamedTextColor;
 import org.bukkit.entity.Player;
 import org.bukkit.inventory.ItemStack;
 import org.bukkit.plugin.java.JavaPlugin;
+import wiki.creeper.mahjong.ai.PrivateState;
+import wiki.creeper.mahjong.ai.ShantenCalculator;
+import wiki.creeper.mahjong.ai.TileCounter;
+import wiki.creeper.mahjong.ai.UkeireCalculator;
+import wiki.creeper.mahjong.ai.UkeireResult;
 import wiki.creeper.mahjong.game.CallRequest;
 import wiki.creeper.mahjong.game.CallType;
 import wiki.creeper.mahjong.game.GameEngine;
+import wiki.creeper.mahjong.game.GameRules;
 import wiki.creeper.mahjong.game.GameState;
+import wiki.creeper.mahjong.game.Hand;
 import wiki.creeper.mahjong.game.KanOption;
+import wiki.creeper.mahjong.game.Meld;
 import wiki.creeper.mahjong.game.MeldType;
+import wiki.creeper.mahjong.game.PlayerState;
 import wiki.creeper.mahjong.game.RoundState;
+import wiki.creeper.mahjong.game.ScoreCalculator;
 import wiki.creeper.mahjong.game.SeatWind;
 import wiki.creeper.mahjong.game.Tile;
 import wiki.creeper.mahjong.game.TileId;
@@ -156,7 +166,29 @@ final class GameTableDialogs {
         }
         List<DialogBody> body = new ArrayList<>();
         body.add(DialogBody.plainMessage(
-                Component.text("버릴 패: " + tile.getId().toShortString(), NamedTextColor.GRAY)));
+                Component.text("버릴 패: " + tile.getId().toDisplayString(), NamedTextColor.GRAY)));
+        DiscardInfo info = buildDiscardInfo(player, tile);
+        if (info != null) {
+            body.add(DialogBody.plainMessage(
+                    Component.text("샹텐: " + info.shanten, NamedTextColor.YELLOW)));
+            body.add(DialogBody.plainMessage(
+                    Component.text("나온 수: " + info.seenCount + "/4", NamedTextColor.GRAY)));
+            String ukeireLine = "유효패: " + info.ukeire.getTotal() + "장";
+            String effective = formatEffectiveTiles(info.ukeire);
+            if (!effective.isEmpty()) {
+                ukeireLine += " (" + effective + ")";
+            }
+            body.add(DialogBody.plainMessage(
+                    Component.text(ukeireLine, NamedTextColor.GRAY)));
+            body.add(DialogBody.plainMessage(
+                    Component.text("후리텐: " + (info.furiten ? "예" : "아니오"),
+                            info.furiten ? NamedTextColor.RED : NamedTextColor.GREEN)));
+            String yakuText = info.shanten <= 0 ? (info.yakuPossible ? "있음" : "없음") : "-";
+            NamedTextColor yakuColor = info.shanten <= 0
+                    ? (info.yakuPossible ? NamedTextColor.AQUA : NamedTextColor.DARK_GRAY)
+                    : NamedTextColor.DARK_GRAY;
+            body.add(DialogBody.plainMessage(Component.text("역 가능: " + yakuText, yakuColor)));
+        }
         List<ActionButton> actions = new ArrayList<>();
         UUID targetId = player.getUniqueId();
         actions.add(ActionButton.create(
@@ -179,6 +211,178 @@ final class GameTableDialogs {
                 .type(DialogType.multiAction(actions).build())
         );
         player.showDialog(dialog);
+    }
+
+    void showDiscardPreview(Player player, Tile tile) {
+        if (player == null || tile == null) {
+            return;
+        }
+        DiscardInfo info = buildDiscardInfo(player, tile);
+        if (info == null) {
+            return;
+        }
+        StringBuilder sb = new StringBuilder();
+        sb.append("선택: ").append(tile.getId().toDisplayString())
+                .append(" | 샹텐 ").append(info.shanten)
+                .append(" | 나온 ").append(info.seenCount).append("/4")
+                .append(" | 유효패 ").append(info.ukeire.getTotal()).append("장");
+        if (info.furiten) {
+            sb.append(" | 후리텐");
+        }
+        if (info.shanten <= 0) {
+            sb.append(" | 역 ").append(info.yakuPossible ? "가능" : "없음");
+        }
+        NamedTextColor color = info.furiten ? NamedTextColor.RED : NamedTextColor.AQUA;
+        player.sendActionBar(Component.text(sb.toString(), color));
+    }
+
+    private DiscardInfo buildDiscardInfo(Player player, Tile tile) {
+        if (player == null || tile == null) {
+            return null;
+        }
+        GameEngine engine = table.getEngine();
+        if (engine == null) {
+            return null;
+        }
+        PlayerState state = engine.getPlayerState(player.getUniqueId());
+        if (state == null) {
+            return null;
+        }
+        List<Tile> remaining = new ArrayList<>(state.getHand().getConcealed());
+        boolean removed = remaining.removeIf(entry -> entry.getInstanceId() == tile.getInstanceId());
+        if (!removed) {
+            return null;
+        }
+        int openMelds = state.getHand().getMelds().size();
+        int shanten = ShantenCalculator.calculate(remaining, openMelds);
+        PrivateState privateState = new PrivateState(state.getPlayerId(), state.getSeatWind(), remaining,
+                state.getHand().getMelds(), state.getHand().isRiichiDeclared(), state.getPoints());
+        int[] counts = TileCounter.buildRemainingCountsFromPrivate(privateState);
+        UkeireResult ukeire = UkeireCalculator.calculate(remaining, openMelds, shanten, counts);
+        boolean furiten = state.getHand().isFuriten();
+        int seenCount = countSeenTiles(state, tile.getId(), engine);
+        boolean yakuPossible = shanten <= 0 && hasAnyYaku(state, remaining, ukeire.getEffectiveTiles(),
+                engine.getRoundState());
+        return new DiscardInfo(shanten, ukeire, furiten, yakuPossible, seenCount);
+    }
+
+    private boolean hasAnyYaku(PlayerState baseState, List<Tile> remaining, List<TileId> effectiveTiles,
+                               RoundState round) {
+        if (baseState == null || remaining == null || effectiveTiles == null || effectiveTiles.isEmpty()
+                || round == null) {
+            return false;
+        }
+        GameRules rules = table.getRulesSnapshot();
+        boolean openTanyao = rules.isOpenTanyaoEnabled();
+        boolean ippatsu = rules.isIppatsuEnabled();
+        PlayerState evaluation = buildEvaluationState(baseState, remaining);
+        Hand hand = evaluation.getHand();
+        for (TileId tileId : effectiveTiles) {
+            Tile winning = new Tile(tileId, -1);
+            hand.addTile(winning);
+            boolean yaku = ScoreCalculator.hasYaku(evaluation, round, true, winning, openTanyao, ippatsu)
+                    || ScoreCalculator.hasYaku(evaluation, round, false, winning, openTanyao, ippatsu);
+            hand.removeTile(winning);
+            if (yaku) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private PlayerState buildEvaluationState(PlayerState state, List<Tile> remaining) {
+        PlayerState copy = new PlayerState(state.getPlayerId(), state.getSeatWind(), state.getPoints());
+        Hand hand = copy.getHand();
+        for (Tile tile : remaining) {
+            hand.addTile(tile);
+        }
+        for (Meld meld : state.getHand().getMelds()) {
+            hand.addMeld(meld);
+        }
+        hand.setRiichiDeclared(state.getHand().isRiichiDeclared());
+        hand.setFuriten(state.getHand().isFuriten());
+        hand.setIppatsuEligible(state.getHand().isIppatsuEligible());
+        hand.setRiichiPendingDiscard(state.getHand().isRiichiPendingDiscard());
+        return copy;
+    }
+
+    private int countSeenTiles(PlayerState state, TileId target, GameEngine engine) {
+        if (state == null || target == null || engine == null) {
+            return 0;
+        }
+        int count = 0;
+        for (Tile tile : state.getHand().getConcealed()) {
+            if (sameTile(tile.getId(), target)) {
+                count++;
+            }
+        }
+        for (Tile tile : engine.getDoraIndicators()) {
+            if (sameTile(tile.getId(), target)) {
+                count++;
+            }
+        }
+        for (UUID playerId : players) {
+            PlayerState other = engine.getPlayerState(playerId);
+            if (other == null) {
+                continue;
+            }
+            for (Tile tile : other.getDiscards()) {
+                if (sameTile(tile.getId(), target)) {
+                    count++;
+                }
+            }
+            for (Meld meld : other.getHand().getMelds()) {
+                for (Tile tile : meld.getTiles()) {
+                    if (sameTile(tile.getId(), target)) {
+                        count++;
+                    }
+                }
+            }
+        }
+        return count;
+    }
+
+    private boolean sameTile(TileId left, TileId right) {
+        if (left == null || right == null) {
+            return false;
+        }
+        return TileCounter.normalize(left).equals(TileCounter.normalize(right));
+    }
+
+    private String formatEffectiveTiles(UkeireResult ukeire) {
+        if (ukeire == null || ukeire.getEffectiveTiles().isEmpty()) {
+            return "";
+        }
+        List<TileId> sorted = new ArrayList<>(ukeire.getEffectiveTiles());
+        sorted.sort(Comparator.comparingInt(this::tileSortKey));
+        int limit = Math.min(6, sorted.size());
+        StringBuilder sb = new StringBuilder();
+        for (int i = 0; i < limit; i++) {
+            if (i > 0) {
+                sb.append(", ");
+            }
+            sb.append(sorted.get(i).toDisplayString());
+        }
+        if (sorted.size() > limit) {
+            sb.append(" 외 ").append(sorted.size() - limit).append("종");
+        }
+        return sb.toString();
+    }
+
+    private static final class DiscardInfo {
+        private final int shanten;
+        private final UkeireResult ukeire;
+        private final boolean furiten;
+        private final boolean yakuPossible;
+        private final int seenCount;
+
+        private DiscardInfo(int shanten, UkeireResult ukeire, boolean furiten, boolean yakuPossible, int seenCount) {
+            this.shanten = shanten;
+            this.ukeire = ukeire == null ? new UkeireResult(0, List.of()) : ukeire;
+            this.furiten = furiten;
+            this.yakuPossible = yakuPossible;
+            this.seenCount = seenCount;
+        }
     }
 
     private List<Component> buildHandResultLines(GameTable.HandResult result) {
@@ -343,13 +547,13 @@ final class GameTableDialogs {
         GameEngine engine = table.getEngine();
         Tile lastDiscard = engine == null ? null : engine.getLastDiscard();
         List<DialogBody> body = new ArrayList<>();
-        String lastText = lastDiscard == null ? "-" : lastDiscard.getId().toShortString();
+        String lastText = lastDiscard == null ? "-" : lastDiscard.getId().toDisplayString();
         body.add(DialogBody.plainMessage(Component.text("마지막 버린패: " + lastText, NamedTextColor.GRAY)));
         if (callWindowSeconds >= 0) {
             body.add(DialogBody.plainMessage(Component.text("남은 시간: " + callWindowSeconds + "초", NamedTextColor.DARK_GRAY)));
         }
         Dialog dialog = Dialog.create(builder -> builder.empty()
-                .base(DialogBase.builder(Component.text("울기 선택", NamedTextColor.GOLD))
+                .base(DialogBase.builder(Component.text("호출 선택", NamedTextColor.GOLD))
                         .body(body)
                         .canCloseWithEscape(true)
                         .build())
@@ -364,7 +568,7 @@ final class GameTableDialogs {
         }
         GameEngine engine = table.getEngine();
         Tile lastDiscard = engine == null ? null : engine.getLastDiscard();
-        String lastText = lastDiscard == null ? "-" : lastDiscard.getId().toShortString();
+        String lastText = lastDiscard == null ? "-" : lastDiscard.getId().toDisplayString();
         List<DialogBody> body = new ArrayList<>();
         body.add(DialogBody.plainMessage(Component.text("치 선택: " + lastText + ".", NamedTextColor.GRAY)));
         Dialog dialog = Dialog.create(builder -> builder.empty()
@@ -477,13 +681,13 @@ final class GameTableDialogs {
     }
 
     private String formatKanOptionLabel(KanOption option, int index) {
-        String tile = option.getTileId().toShortString();
+        String tile = option.getTileId().toDisplayString();
         String type = option.getType() == MeldType.KAN_CLOSED ? "암깡" : "가깡";
         return index + ". " + type + " " + tile;
     }
 
     private String describeSelfKan(KanOption option) {
-        String tile = option.getTileId().toShortString();
+        String tile = option.getTileId().toDisplayString();
         String type = option.getType() == MeldType.KAN_CLOSED ? "암깡" : "가깡";
         return type + " (" + tile + ")";
     }
@@ -507,7 +711,7 @@ final class GameTableDialogs {
             if (i > 0) {
                 sb.append("-");
             }
-            sb.append(ids.get(i).toShortString());
+                sb.append(ids.get(i).toDisplayString());
         }
         return sb.toString();
     }
@@ -659,7 +863,7 @@ final class GameTableDialogs {
         if (player == null || options == null || options.isEmpty()) {
             return;
         }
-        String text = "울기 가능: " + String.join("/", options);
+        String text = "가능: " + String.join("/", options);
         if (remainingSeconds >= 0) {
             text += " (남은 " + remainingSeconds + "초)";
         }

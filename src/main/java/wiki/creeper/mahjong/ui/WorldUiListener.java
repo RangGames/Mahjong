@@ -50,6 +50,9 @@ public class WorldUiListener implements Listener {
             return;
         }
         Player player = event.getPlayer();
+        if (tableManager.getTableByPlayer(player).map(GameTable::getId).filter(tableId::equals).isEmpty()) {
+            return;
+        }
         Integer handTile = container.get(handTileKey, PersistentDataType.INTEGER);
         if (handTile != null) {
             String ownerRaw = container.get(handOwnerKey, PersistentDataType.STRING);

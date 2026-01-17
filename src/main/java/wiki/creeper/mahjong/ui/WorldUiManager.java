@@ -34,6 +34,7 @@ import org.joml.Vector3f;
 import wiki.creeper.mahjong.game.GameEngine;
 import wiki.creeper.mahjong.game.GameState;
 import wiki.creeper.mahjong.game.Meld;
+import wiki.creeper.mahjong.game.MeldType;
 import wiki.creeper.mahjong.game.PlayerState;
 import wiki.creeper.mahjong.game.RoundState;
 import wiki.creeper.mahjong.game.SeatWind;
@@ -45,40 +46,42 @@ public class WorldUiManager {
     private static final float ACTION_HEIGHT = 0.4f;
     private static final double TABLE_Y = 0.2;
     private static final float TABLE_HEIGHT_SCALE = 0.2f;
-    private static final double TABLE_SPACING = 0.85;
+    private static final double TABLE_SPACING = 0.9;
     private static final int TABLE_SIZE = 3;
-    private static final double SCOREBOARD_Y = 3.05;
-    private static final double DORA_TEXT_Y = 2.65;
-    private static final double ACTION_STATUS_Y = 1.75;
-    private static final double HAND_RESULT_X = -2.4;
-    private static final double HAND_RESULT_Y = 2.05;
+    private static final double SCOREBOARD_Y = 3.15;
+    private static final double DORA_TEXT_Y = 2.75;
+    private static final double ACTION_STATUS_Y = 1.85;
+    private static final double HAND_RESULT_X = -2.6;
+    private static final double HAND_RESULT_Y = 2.2;
     private static final int DISCARD_COLUMNS = 6;
-    private static final double DISCARD_Y = 0.95;
-    private static final double DISCARD_DEPTH = 2.1;
-    private static final double DISCARD_SPACING = 0.36;
-    private static final double DISCARD_ROW_SPACING = 0.32;
-    private static final double DORA_ITEM_Y = 2.25;
-    private static final double DORA_ITEM_SPACING = 0.32;
-    private static final double MELD_Y = 1.08;
-    private static final double MELD_DEPTH = 2.45;
-    private static final double MELD_SPACING = 0.34;
-    private static final double MELD_GROUP_SPACING = 0.2;
-    private static final double HAND_Y = 1.28;
-    private static final double HAND_SPACING = 0.32;
-    private static final double HAND_DRAWN_GAP = 0.26;
-    private static final double HAND_DRAWN_RAISE = 0.18;
+    private static final double DISCARD_Y = 1.05;
+    private static final double DISCARD_DEPTH = 2.3;
+    private static final double DISCARD_SPACING = 0.38;
+    private static final double DISCARD_ROW_SPACING = 0.34;
+    private static final double DORA_ITEM_Y = 2.35;
+    private static final double DORA_ITEM_SPACING = 0.34;
+    private static final double MELD_Y = 1.15;
+    private static final double MELD_DEPTH = 2.6;
+    private static final double MELD_SPACING = 0.36;
+    private static final double MELD_GROUP_SPACING = 0.22;
+    private static final double MELD_TYPE_ROW_GAP = 0.4;
+    private static final double HAND_Y = 1.42;
+    private static final double HAND_SPACING = 0.34;
+    private static final double HAND_DRAWN_GAP = 0.3;
+    private static final double HAND_DRAWN_RAISE = 0.2;
     private static final Vector3f DISCARD_BLOCK_SCALE = new Vector3f(0.23f, 0.07f, 0.23f);
     private static final Vector3f DISCARD_ITEM_SCALE = new Vector3f(0.3f, 0.3f, 0.3f);
-    private static final Vector3f DISCARD_LABEL_SCALE = new Vector3f(0.26f, 0.26f, 0.26f);
+    private static final Vector3f DISCARD_LABEL_SCALE = new Vector3f(0.28f, 0.28f, 0.28f);
     private static final Vector3f HAND_ITEM_SCALE = new Vector3f(0.32f, 0.32f, 0.32f);
-    private static final Vector3f HAND_LABEL_SCALE = new Vector3f(0.26f, 0.26f, 0.26f);
-    private static final Vector3f MELD_LABEL_SCALE = new Vector3f(0.28f, 0.28f, 0.28f);
-    private static final Vector3f SEAT_LABEL_SCALE = new Vector3f(0.34f, 0.34f, 0.34f);
-    private static final double DISCARD_LABEL_Y = 0.1;
-    private static final double MELD_LABEL_Y = 0.14;
-    private static final double HAND_LABEL_Y = 0.1;
-    private static final double SEAT_LABEL_Y = 1.7;
-    private static final double SEAT_LABEL_RADIUS = 2.85;
+    private static final Vector3f HAND_LABEL_SCALE = new Vector3f(0.28f, 0.28f, 0.28f);
+    private static final Vector3f MELD_LABEL_SCALE = new Vector3f(0.3f, 0.3f, 0.3f);
+    private static final Vector3f SEAT_LABEL_SCALE = new Vector3f(0.36f, 0.36f, 0.36f);
+    private static final float CALLED_TILE_YAW = 90f;
+    private static final double DISCARD_LABEL_Y = 0.12;
+    private static final double MELD_LABEL_Y = 0.16;
+    private static final double HAND_LABEL_Y = 0.12;
+    private static final double SEAT_LABEL_Y = 1.85;
+    private static final double SEAT_LABEL_RADIUS = 3.2;
     private static final int SCOREBOARD_WIDTH = 160;
     private static final int DORA_WIDTH = 140;
     private static final int PANEL_WIDTH = 140;
@@ -101,6 +104,7 @@ public class WorldUiManager {
     private final List<TextDisplay> seatLabels = new ArrayList<>();
     private final Map<UUID, List<Entity>> handDisplays = new HashMap<>();
     private final Map<WorldUiAction, ActionButton> buttons = new EnumMap<>(WorldUiAction.class);
+    private String lastDiscardSignature;
 
     public WorldUiManager(JavaPlugin plugin, UUID tableId) {
         this.plugin = plugin;
@@ -174,6 +178,7 @@ public class WorldUiManager {
         }
         buttons.clear();
         anchor = null;
+        lastDiscardSignature = null;
     }
 
     public void updateBoard(GameTable table) {
@@ -242,7 +247,7 @@ public class WorldUiManager {
             if (i > 0) {
                 sb.append(", ");
             }
-            sb.append(indicators.get(i).getId().toShortString());
+            sb.append(indicators.get(i).getId().toDisplayString());
         }
         doraLine.text(Component.text(sb.toString(), NamedTextColor.GOLD));
         updateDoraItems(indicators);
@@ -252,20 +257,38 @@ public class WorldUiManager {
         if (anchor == null) {
             return;
         }
-        clearDiscardItems();
-        clearSeatLabels();
         GameEngine engine = table.getEngine();
         if (engine == null) {
+            lastDiscardSignature = null;
+            clearDiscardItems();
+            clearSeatLabels();
             return;
         }
-        Tile lastDiscard = engine.getLastDiscard();
-        RoundState round = engine.getRoundState();
+        Map<SeatWind, PlayerState> seatStates = new EnumMap<>(SeatWind.class);
+        Map<SeatWind, UUID> seatPlayers = new EnumMap<>(SeatWind.class);
         for (UUID playerId : table.getPlayers()) {
             PlayerState state = engine.getPlayerState(playerId);
             if (state == null) {
                 continue;
             }
-            SeatWind wind = state.getSeatWind();
+            seatStates.put(state.getSeatWind(), state);
+            seatPlayers.put(state.getSeatWind(), playerId);
+        }
+        Tile lastDiscard = engine.getLastDiscard();
+        RoundState round = engine.getRoundState();
+        String signature = buildDiscardSignature(table, seatStates, seatPlayers, lastDiscard);
+        if (signature.equals(lastDiscardSignature)) {
+            return;
+        }
+        lastDiscardSignature = signature;
+        clearDiscardItems();
+        clearSeatLabels();
+        for (SeatWind wind : SeatWind.values()) {
+            PlayerState state = seatStates.get(wind);
+            UUID playerId = seatPlayers.get(wind);
+            if (state == null || playerId == null) {
+                continue;
+            }
             spawnSeatLabel(wind, table.getDisplayName(playerId), state, round);
             spawnDiscardItems(state.getDiscards(), wind, lastDiscard);
             spawnMeldItems(state.getHand().getMelds(), wind);
@@ -370,16 +393,18 @@ public class WorldUiManager {
         if (engine == null) {
             setActionStatus("대기 중");
             disableAllActions();
+            hideAllActionButtons();
             return;
         }
         if (engine.getState() == GameState.HAND_END) {
             setActionStatus("국 종료");
             disableAllActions();
+            hideAllActionButtons();
             return;
         }
         boolean callWindow = engine.getState() == GameState.CALL_WINDOW;
         if (callWindow) {
-            setActionStatus(callSecondsRemaining >= 0 ? "울기 " + callSecondsRemaining + "초" : "울기");
+            setActionStatus("진행 중");
         } else if (engine.getState() == GameState.TURN_DISCARD) {
             UUID active = engine.getActivePlayer();
             PlayerState activeState = active != null ? engine.getPlayerState(active) : null;
@@ -397,39 +422,51 @@ public class WorldUiManager {
             setActionStatus("진행 중");
         }
 
+        Map<UUID, ActionVisibility> visibility = new HashMap<>();
         boolean showChi = false;
         boolean showPon = false;
         boolean showKan = false;
         boolean showRon = false;
-        if (callWindow) {
-            // SIMPLIFIED: call buttons are shown globally, not per-player visibility.
-            UUID chiPlayer = engine.getNextPlayerForCall();
-            showChi = chiPlayer != null && engine.getChiOptionCount(chiPlayer) > 0;
-            for (UUID playerId : table.getPlayers()) {
-                if (engine.canRon(playerId)) {
-                    showRon = true;
-                }
-                if (engine.createPonRequest(playerId).isPresent()) {
-                    showPon = true;
-                }
-                if (engine.createKanRequest(playerId).isPresent()) {
-                    showKan = true;
+        boolean showRiichi = false;
+        boolean showTsumo = false;
+        for (UUID playerId : table.getPlayers()) {
+            if (table.isBot(playerId)) {
+                continue;
+            }
+            boolean chi = false;
+            boolean pon = false;
+            boolean kan = false;
+            boolean ron = false;
+            boolean riichi = false;
+            boolean tsumo = false;
+            if (callWindow) {
+                chi = engine.getChiOptionCount(playerId) > 0;
+                pon = engine.createPonRequest(playerId).isPresent();
+                kan = engine.createKanRequest(playerId).isPresent();
+                ron = engine.canRon(playerId);
+            } else {
+                UUID active = engine.getActivePlayer();
+                if (playerId.equals(active)) {
+                    kan = engine.canDeclareKan(playerId);
+                    riichi = engine.canDeclareRiichi(playerId);
+                    tsumo = engine.canTsumo(playerId);
                 }
             }
-        } else {
-            UUID active = engine.getActivePlayer();
-            showKan = active != null && engine.canDeclareKan(active);
+            visibility.put(playerId, new ActionVisibility(chi, pon, kan, ron, riichi, tsumo));
+            showChi |= chi;
+            showPon |= pon;
+            showKan |= kan;
+            showRon |= ron;
+            showRiichi |= riichi;
+            showTsumo |= tsumo;
         }
         setActionEnabled(WorldUiAction.CHI, showChi);
         setActionEnabled(WorldUiAction.PON, showPon);
         setActionEnabled(WorldUiAction.KAN, showKan);
         setActionEnabled(WorldUiAction.RON, showRon);
-
-        UUID active = engine.getActivePlayer();
-        boolean canRiichi = active != null && engine.canDeclareRiichi(active);
-        boolean canTsumo = active != null && engine.canTsumo(active);
-        setActionEnabled(WorldUiAction.RIICHI, !callWindow && canRiichi);
-        setActionEnabled(WorldUiAction.TSUMO, !callWindow && canTsumo);
+        setActionEnabled(WorldUiAction.RIICHI, !callWindow && showRiichi);
+        setActionEnabled(WorldUiAction.TSUMO, !callWindow && showTsumo);
+        updateActionVisibility(visibility);
     }
 
     private void setActionStatus(String text) {
@@ -439,6 +476,65 @@ public class WorldUiManager {
     private void disableAllActions() {
         for (WorldUiAction action : WorldUiAction.values()) {
             setActionEnabled(action, false);
+        }
+    }
+
+    private void updateActionVisibility(Map<UUID, ActionVisibility> visibility) {
+        if (anchor == null) {
+            return;
+        }
+        World world = anchor.getWorld();
+        if (world == null) {
+            return;
+        }
+        for (Player player : world.getPlayers()) {
+            ActionVisibility state = visibility.get(player.getUniqueId());
+            if (state == null) {
+                hideAllActions(player);
+                continue;
+            }
+            setActionVisibility(player, WorldUiAction.CHI, state.chi);
+            setActionVisibility(player, WorldUiAction.PON, state.pon);
+            setActionVisibility(player, WorldUiAction.KAN, state.kan);
+            setActionVisibility(player, WorldUiAction.RON, state.ron);
+            setActionVisibility(player, WorldUiAction.RIICHI, state.riichi);
+            setActionVisibility(player, WorldUiAction.TSUMO, state.tsumo);
+        }
+    }
+
+    private void hideAllActionButtons() {
+        if (anchor == null) {
+            return;
+        }
+        World world = anchor.getWorld();
+        if (world == null) {
+            return;
+        }
+        for (Player player : world.getPlayers()) {
+            hideAllActions(player);
+        }
+    }
+
+    private void hideAllActions(Player player) {
+        for (WorldUiAction action : WorldUiAction.values()) {
+            setActionVisibility(player, action, false);
+        }
+    }
+
+    private void setActionVisibility(Player player, WorldUiAction action, boolean visible) {
+        if (player == null || action == null) {
+            return;
+        }
+        ActionButton button = buttons.get(action);
+        if (button == null) {
+            return;
+        }
+        if (visible) {
+            player.showEntity(plugin, button.label);
+            player.showEntity(plugin, button.interaction);
+        } else {
+            player.hideEntity(plugin, button.label);
+            player.hideEntity(plugin, button.interaction);
         }
     }
 
@@ -553,7 +649,7 @@ public class WorldUiManager {
             Tile tile = discards.get(i);
             boolean highlight = lastDiscard != null
                     && tile.getInstanceId() == lastDiscard.getInstanceId();
-            spawnDiscardBlock(world, location, tile, highlight);
+            spawnDiscardBlock(world, location, tile, highlight, wind, false);
             spawnDiscardLabel(world, location, tile, highlight, wind);
         }
         // SIMPLIFIED: discard layout uses fixed world axes and ignores player orientation.
@@ -568,29 +664,33 @@ public class WorldUiManager {
             return;
         }
         DiscardLayout layout = discardLayout(wind);
-        Vector base = meldBaseOffset(wind);
         Vector dir = layout.col.clone();
-        int offsetIndex = 0;
+        Map<MeldType, Integer> offsets = new EnumMap<>(MeldType.class);
         for (Meld meld : melds) {
+            MeldType type = meld.getType();
+            Vector base = meldBaseOffset(wind).clone().add(meldTypeOffset(layout, type));
+            int offsetIndex = offsets.getOrDefault(type, 0);
             int groupStart = offsetIndex;
             List<Tile> tiles = meld.getTiles();
-            for (Tile tile : tiles) {
+            int calledIndex = resolveCalledIndex(meld);
+            for (int i = 0; i < tiles.size(); i++) {
                 Vector offset = base.clone().add(dir.clone().multiply(offsetIndex * MELD_SPACING));
                 Location location = anchor.clone().add(offset);
-                spawnDiscardBlock(world, location, tile, false);
-                spawnDiscardLabel(world, location, tile, false, wind);
+                boolean sideways = i == calledIndex;
+                spawnDiscardBlock(world, location, tiles.get(i), false, wind, sideways);
+                spawnDiscardLabel(world, location, tiles.get(i), false, wind);
                 offsetIndex++;
             }
             if (!tiles.isEmpty()) {
                 double centerIndex = groupStart + (tiles.size() - 1) / 2.0;
                 Vector offset = base.clone().add(dir.clone().multiply(centerIndex * MELD_SPACING));
                 Location labelLocation = anchor.clone().add(offset);
-                spawnMeldLabel(world, labelLocation, meld.getType(), wind);
+                spawnMeldLabel(world, labelLocation, type, wind);
             }
             int gap = Math.max(1, (int) Math.round(MELD_GROUP_SPACING / MELD_SPACING));
             offsetIndex += gap;
+            offsets.put(type, offsetIndex);
         }
-        // SIMPLIFIED: meld layout ignores called-from orientation and uses a flat row.
     }
 
     private void clearDiscardItems() {
@@ -682,7 +782,7 @@ public class WorldUiManager {
 
         if (!plugin.getConfig().getBoolean("resourcePack.enabled", false)) {
             TextDisplay label = world.spawn(baseLocation.clone().add(0, HAND_LABEL_Y, 0), TextDisplay.class);
-            label.text(Component.text(tile.getId().toShortString(), NamedTextColor.WHITE));
+                label.text(Component.text(tile.getId().toDisplayString(), NamedTextColor.WHITE));
             label.setBillboard(Display.Billboard.VERTICAL);
             label.setRotation(0f, 0f);
             label.setShadowed(false);
@@ -723,13 +823,20 @@ public class WorldUiManager {
         }
     }
 
-    private void spawnDiscardBlock(World world, Location location, Tile tile, boolean highlight) {
+    private void spawnDiscardBlock(World world, Location location, Tile tile, boolean highlight, SeatWind wind, boolean sideways) {
+        float yaw = yawForSeat(wind);
+        if (sideways) {
+            yaw += CALLED_TILE_YAW;
+        }
+        if (!shouldRenderDiscardTiles()) {
+            return;
+        }
         if (plugin.getConfig().getBoolean("resourcePack.enabled", false)) {
             ItemDisplay display = world.spawn(location, ItemDisplay.class);
             display.setItemStack(createTileItem(tile));
             display.setItemDisplayTransform(ItemDisplay.ItemDisplayTransform.FIXED);
             display.setBillboard(Display.Billboard.FIXED);
-            display.setRotation(0f, 0f);
+            display.setRotation(yaw, 0f);
             display.setShadowRadius(0);
             display.setShadowStrength(0);
             display.setGlowing(highlight);
@@ -740,7 +847,7 @@ public class WorldUiManager {
         BlockDisplay display = world.spawn(location, BlockDisplay.class);
         display.setBlock(createDiscardBlockData(tile));
         display.setBillboard(Display.Billboard.FIXED);
-        display.setRotation(0f, 0f);
+        display.setRotation(yaw, 0f);
         display.setShadowRadius(0);
         display.setShadowStrength(0);
         display.setGlowing(highlight);
@@ -757,7 +864,7 @@ public class WorldUiManager {
             return;
         }
         TextDisplay label = world.spawn(location.clone().add(0, DISCARD_LABEL_Y, 0), TextDisplay.class);
-        String text = tile.getId().toShortString();
+        String text = tile.getId().toDisplayString();
         if (highlight) {
             text += " (마지막)";
         }
@@ -777,12 +884,12 @@ public class WorldUiManager {
         discardDisplays.add(label);
     }
 
-    private void spawnMeldLabel(World world, Location location, wiki.creeper.mahjong.game.MeldType type, SeatWind wind) {
+    private void spawnMeldLabel(World world, Location location, MeldType type, SeatWind wind) {
         if (type == null) {
             return;
         }
         TextDisplay label = world.spawn(location.clone().add(0, MELD_LABEL_Y, 0), TextDisplay.class);
-        label.text(Component.text(meldLabel(type), meldColor(type)));
+        label.text(Component.text(meldLabelText(type), meldColor(type)));
         label.setBillboard(Display.Billboard.FIXED);
         label.setRotation(yawForSeat(wind), 0f);
         label.setShadowed(false);
@@ -797,7 +904,49 @@ public class WorldUiManager {
         discardDisplays.add(label);
     }
 
-    private String meldLabel(wiki.creeper.mahjong.game.MeldType type) {
+    private Vector meldTypeOffset(DiscardLayout layout, MeldType type) {
+        if (layout == null || type == null) {
+            return new Vector();
+        }
+        double rowOffset;
+        switch (type) {
+            case CHI:
+                rowOffset = -MELD_TYPE_ROW_GAP;
+                break;
+            case PON:
+                rowOffset = 0;
+                break;
+            case KAN_OPEN:
+            case KAN_ADDED:
+            case KAN_CLOSED:
+            default:
+                rowOffset = MELD_TYPE_ROW_GAP;
+                break;
+        }
+        return layout.row.clone().multiply(rowOffset);
+    }
+
+    private int resolveCalledIndex(Meld meld) {
+        if (meld == null || meld.getCalledFrom() == null) {
+            return -1;
+        }
+        List<Tile> tiles = meld.getTiles();
+        if (tiles.isEmpty()) {
+            return -1;
+        }
+        switch (meld.getType()) {
+            case CHI:
+            case PON:
+            case KAN_OPEN:
+                return tiles.size() - 1;
+            case KAN_ADDED:
+                return tiles.size() >= 2 ? tiles.size() - 2 : -1;
+            default:
+                return -1;
+        }
+    }
+
+    private String meldLabelText(MeldType type) {
         switch (type) {
             case CHI:
                 return "치";
@@ -814,7 +963,24 @@ public class WorldUiManager {
         }
     }
 
-    private NamedTextColor meldColor(wiki.creeper.mahjong.game.MeldType type) {
+    private String meldLabel(MeldType type) {
+        switch (type) {
+            case CHI:
+                return "치";
+            case PON:
+                return "퐁";
+            case KAN_OPEN:
+                return "깡";
+            case KAN_CLOSED:
+                return "암깡";
+            case KAN_ADDED:
+                return "가깡";
+            default:
+                return "부로";
+        }
+    }
+
+    private NamedTextColor meldColor(MeldType type) {
         switch (type) {
             case CHI:
                 return NamedTextColor.GREEN;
@@ -931,20 +1097,20 @@ public class WorldUiManager {
         Vector col;
         switch (wind) {
             case EAST:
-                base = new Vector(-1.1, HAND_Y, 2.6);
+                base = new Vector(-1.3, HAND_Y, 3.0);
                 col = new Vector(1, 0, 0);
                 break;
             case SOUTH:
-                base = new Vector(2.6, HAND_Y, 1.1);
+                base = new Vector(3.0, HAND_Y, 1.3);
                 col = new Vector(0, 0, -1);
                 break;
             case WEST:
-                base = new Vector(1.1, HAND_Y, -2.6);
+                base = new Vector(1.3, HAND_Y, -3.0);
                 col = new Vector(-1, 0, 0);
                 break;
             case NORTH:
             default:
-                base = new Vector(-2.6, HAND_Y, -1.1);
+                base = new Vector(-3.0, HAND_Y, -1.3);
                 col = new Vector(0, 0, 1);
                 break;
         }
@@ -1021,10 +1187,53 @@ public class WorldUiManager {
         }
     }
 
+    private boolean shouldRenderDiscardTiles() {
+        if (plugin.getConfig().getBoolean("resourcePack.enabled", false)) {
+            return true;
+        }
+        return !plugin.getConfig().getBoolean("ui.world.compactDiscards", true);
+    }
+
+    private String buildDiscardSignature(GameTable table, Map<SeatWind, PlayerState> seatStates,
+                                         Map<SeatWind, UUID> seatPlayers, Tile lastDiscard) {
+        StringBuilder sb = new StringBuilder();
+        sb.append("last=");
+        sb.append(lastDiscard != null ? lastDiscard.getInstanceId() : -1);
+        sb.append('|');
+        for (SeatWind seat : SeatWind.values()) {
+            PlayerState state = seatStates.get(seat);
+            UUID playerId = seatPlayers.get(seat);
+            if (state == null) {
+                sb.append(seat.name()).append(":null|");
+                continue;
+            }
+            if (playerId != null) {
+                sb.append(table.getDisplayName(playerId)).append(':');
+            }
+            sb.append(seat.name())
+                    .append(':').append(state.getPoints())
+                    .append(':').append(state.getHand().isRiichiDeclared())
+                    .append(':');
+            for (Tile tile : state.getDiscards()) {
+                sb.append(tile.getInstanceId()).append(',');
+            }
+            sb.append(':');
+            for (Meld meld : state.getHand().getMelds()) {
+                sb.append(meld.getType()).append('[');
+                for (Tile tile : meld.getTiles()) {
+                    sb.append(tile.getInstanceId()).append(',');
+                }
+                sb.append(']');
+            }
+            sb.append('|');
+        }
+        return sb.toString();
+    }
+
     private ItemStack createTileItem(Tile tile) {
         ItemStack item = new ItemStack(Material.PAPER);
         ItemMeta meta = item.getItemMeta();
-        meta.displayName(Component.text(tile.getId().toShortString(), NamedTextColor.WHITE));
+        meta.displayName(Component.text(tile.getId().toDisplayString(), NamedTextColor.WHITE));
         if (plugin.getConfig().getBoolean("resourcePack.enabled", false)) {
             NamespacedKey modelKey = TileItemModel.resolve(plugin, tile.getId());
             if (modelKey != null) {
@@ -1041,6 +1250,24 @@ public class WorldUiManager {
             return player.getName();
         }
         return playerId.toString();
+    }
+
+    private static final class ActionVisibility {
+        private final boolean chi;
+        private final boolean pon;
+        private final boolean kan;
+        private final boolean ron;
+        private final boolean riichi;
+        private final boolean tsumo;
+
+        private ActionVisibility(boolean chi, boolean pon, boolean kan, boolean ron, boolean riichi, boolean tsumo) {
+            this.chi = chi;
+            this.pon = pon;
+            this.kan = kan;
+            this.ron = ron;
+            this.riichi = riichi;
+            this.tsumo = tsumo;
+        }
     }
 
     private static final class ActionButton {
