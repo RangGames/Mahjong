@@ -11,6 +11,7 @@ import org.bukkit.inventory.InventoryHolder;
 import org.bukkit.inventory.ItemStack;
 import wiki.creeper.mahjong.ai.BotDifficulty;
 import wiki.creeper.mahjong.game.SeatWind;
+import wiki.creeper.mahjong.rank.RankedQueueManager;
 import wiki.creeper.mahjong.table.GameTable;
 import wiki.creeper.mahjong.table.TableManager;
 import wiki.creeper.mahjong.ui.RoomInventory;
@@ -19,9 +20,11 @@ import wiki.creeper.mahjong.ui.RoomMenuType;
 public class MahjongListener implements Listener {
 
     private final TableManager tableManager;
+    private final RankedQueueManager rankedQueueManager;
 
-    public MahjongListener(TableManager tableManager) {
+    public MahjongListener(TableManager tableManager, RankedQueueManager rankedQueueManager) {
         this.tableManager = tableManager;
+        this.rankedQueueManager = rankedQueueManager;
     }
 
     @EventHandler
@@ -68,6 +71,9 @@ public class MahjongListener implements Listener {
 
     @EventHandler
     public void onPlayerQuit(PlayerQuitEvent event) {
+        if (rankedQueueManager != null) {
+            rankedQueueManager.remove(event.getPlayer().getUniqueId());
+        }
         tableManager.leaveTable(event.getPlayer());
     }
 

@@ -4,6 +4,7 @@ import java.util.UUID;
 
 public final class RankedProfile {
     private final UUID playerId;
+    private String lastKnownName;
     private double rating;
     private int games;
     private int firsts;
@@ -11,8 +12,9 @@ public final class RankedProfile {
     private int thirds;
     private int fourths;
 
-    RankedProfile(UUID playerId, double rating, int games, int firsts, int seconds, int thirds, int fourths) {
+    RankedProfile(UUID playerId, String lastKnownName, double rating, int games, int firsts, int seconds, int thirds, int fourths) {
         this.playerId = playerId;
+        this.lastKnownName = lastKnownName;
         this.rating = rating;
         this.games = games;
         this.firsts = firsts;
@@ -23,6 +25,10 @@ public final class RankedProfile {
 
     public UUID getPlayerId() {
         return playerId;
+    }
+
+    public String getLastKnownName() {
+        return lastKnownName;
     }
 
     public double getRating() {
@@ -47,6 +53,13 @@ public final class RankedProfile {
 
     public int getFourths() {
         return fourths;
+    }
+
+    void setLastKnownName(String lastKnownName) {
+        if (lastKnownName == null || lastKnownName.isBlank()) {
+            return;
+        }
+        this.lastKnownName = lastKnownName;
     }
 
     void applyResult(int placement, double delta) {

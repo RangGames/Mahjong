@@ -354,6 +354,28 @@ public class GameTable {
         updateRoomLobbyUi();
     }
 
+    public boolean prepareRankedMatch() {
+        if (!rankedMode || !roomMode || getState() != GameState.LOBBY) {
+            return false;
+        }
+        if (players.size() < MAX_PLAYERS) {
+            return false;
+        }
+        List<UUID> shuffledPlayers = new ArrayList<>(players);
+        Collections.shuffle(shuffledPlayers);
+        List<SeatWind> seats = new ArrayList<>(List.of(SeatWind.values()));
+        Collections.shuffle(seats);
+        seatAssignments.clear();
+        playerSeats.clear();
+        for (int i = 0; i < MAX_PLAYERS && i < shuffledPlayers.size(); i++) {
+            assignSeatInternal(shuffledPlayers.get(i), seats.get(i), true);
+        }
+        readyPlayers.clear();
+        readyPlayers.addAll(players);
+        updateRoomLobbyUi();
+        return true;
+    }
+
     public boolean toggleReady(Player player) {
         if (!roomMode || getState() != GameState.LOBBY || player == null) {
             return false;

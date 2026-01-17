@@ -7,6 +7,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Optional;
 import java.util.UUID;
+import org.bukkit.Bukkit;
 import org.bukkit.command.Command;
 import org.bukkit.command.CommandExecutor;
 import org.bukkit.command.CommandSender;
@@ -14,15 +15,23 @@ import org.bukkit.command.TabCompleter;
 import org.bukkit.entity.Player;
 import wiki.creeper.mahjong.ai.BotDifficulty;
 import wiki.creeper.mahjong.game.GameState;
+import wiki.creeper.mahjong.rank.RankedManager;
+import wiki.creeper.mahjong.rank.RankedProfile;
+import wiki.creeper.mahjong.rank.RankedQueueManager;
+import wiki.creeper.mahjong.rank.RankedTier;
 import wiki.creeper.mahjong.table.GameTable;
 import wiki.creeper.mahjong.table.TableManager;
 
 public class MahjongCommand implements CommandExecutor, TabCompleter {
 
     private final TableManager tableManager;
+    private final RankedManager rankedManager;
+    private final RankedQueueManager rankedQueueManager;
 
-    public MahjongCommand(TableManager tableManager) {
+    public MahjongCommand(TableManager tableManager, RankedManager rankedManager, RankedQueueManager rankedQueueManager) {
         this.tableManager = tableManager;
+        this.rankedManager = rankedManager;
+        this.rankedQueueManager = rankedQueueManager;
     }
 
     @Override
@@ -55,6 +64,8 @@ public class MahjongCommand implements CommandExecutor, TabCompleter {
                 return handleRoomCommand(player, args);
             case "ranked":
                 return handleRankedCommand(player, args);
+            case "rank":
+                return handleRankCommand(player, args);
             case "join":
                 if (tableManager.getTableByPlayer(player).isPresent()) {
                     player.sendMessage("이미 다른 테이블에 참여 중이에요. 먼저 나간 뒤 다시 시도해 주세요.");
@@ -130,6 +141,9 @@ public class MahjongCommand implements CommandExecutor, TabCompleter {
                 }
                 return true;
             case "leave":
+                if (rankedQueueManager != null && rankedQueueManager.leave(player)) {
+                    return true;
+                }
                 if (tableManager.leaveTable(player)) {
                     player.sendMessage("테이블에서 나왔어요.");
                 } else {
@@ -324,6 +338,7 @@ public class MahjongCommand implements CommandExecutor, TabCompleter {
             subs.add("table");
             subs.add("join");
             subs.add("ranked");
+            subs.add("rank");
             subs.add("spectate");
             subs.add("watch");
             subs.add("leave");
@@ -360,7 +375,10 @@ public class MahjongCommand implements CommandExecutor, TabCompleter {
             return subs;
         }
         if (args.length == 2 && "ranked".equalsIgnoreCase(args[0])) {
-            return List.of("create", "join");
+            return List.of("create", "join", "queue", "match", "leave", "cancel", "status");
+        }
+        if (args.length == 2 && "rank".equalsIgnoreCase(args[0])) {
+            return List.of("top");
         }
         if (args.length == 2 && "bot".equalsIgnoreCase(args[0])) {
             return List.of("add", "remove");
@@ -440,6 +458,10 @@ public class MahjongCommand implements CommandExecutor, TabCompleter {
         String action = args[1].toLowerCase(Locale.ROOT);
         switch (action) {
             case "create":
+                if (rankedQueueManager != null && rankedQueueManager.isQueued(player.getUniqueId())) {
+                    player.sendMessage("먼저 매칭 대기열에서 나가주세요.");
+                    return true;
+                }
                 if (tableManager.getTableByPlayer(player).isPresent()) {
                     player.sendMessage("이미 다른 테이블에 참여 중이에요. 먼저 나간 뒤 다시 시도해 주세요.");
                     return true;
@@ -450,6 +472,10 @@ public class MahjongCommand implements CommandExecutor, TabCompleter {
                 room.showRoomLobby(player);
                 return true;
             case "join":
+                if (rankedQueueManager != null && rankedQueueManager.isQueued(player.getUniqueId())) {
+                    player.sendMessage("먼저 매칭 대기열에서 나가주세요.");
+                    return true;
+                }
                 if (tableManager.getTableByPlayer(player).isPresent()) {
                     player.sendMessage("이미 다른 테이블에 참여 중이에요. 먼저 나간 뒤 다시 시도해 주세요.");
                     return true;
@@ -574,7 +600,7 @@ public class MahjongCommand implements CommandExecutor, TabCompleter {
     }
 
     private boolean handleRankedCommand(Player player, String[] args) {
-        if (!tableManager.isRankedEnabled()) {
+        if (rankedManager == null || !rankedManager.isAvailable()) {
             player.sendMessage("랭크전이 비활성화되어 있어요.");
             return true;
         }
@@ -631,10 +657,85 @@ public class MahjongCommand implements CommandExecutor, TabCompleter {
                     player.sendMessage("랭크전 입장에 실패했어요. 다시 시도해 주세요.");
                 }
                 return true;
+            case "queue":
+            case "match":
+                if (rankedQueueManager == null) {
+                    player.sendMessage("랭크전 매칭 기능을 사용할 수 없어요.");
+                    return true;
+                }
+                rankedQueueManager.enqueue(player);
+                return true;
+            case "leave":
+            case "cancel":
+                if (rankedQueueManager == null) {
+                    player.sendMessage("랭크전 매칭 기능을 사용할 수 없어요.");
+                    return true;
+                }
+                if (!rankedQueueManager.leave(player)) {
+                    player.sendMessage("현재 매칭 대기열에 있지 않아요.");
+                }
+                return true;
+            case "status":
+                if (rankedQueueManager == null) {
+                    player.sendMessage("랭크전 매칭 기능을 사용할 수 없어요.");
+                    return true;
+                }
+                if (!rankedQueueManager.isEnabled()) {
+                    player.sendMessage("랭크전 매칭이 비활성화되어 있어요.");
+                    return true;
+                }
+                int position = rankedQueueManager.getPosition(player.getUniqueId());
+                int size = rankedQueueManager.getQueueSize();
+                if (position <= 0) {
+                    player.sendMessage("현재 매칭 대기열에 있지 않아요. (대기 인원: " + size + "명)");
+                } else {
+                    player.sendMessage("매칭 대기열 순번: " + position + " (대기 인원: " + size + "/4)");
+                }
+                return true;
             default:
                 sendRankedUsage(player);
                 return true;
         }
+    }
+
+    private boolean handleRankCommand(Player player, String[] args) {
+        if (rankedManager == null || !rankedManager.isAvailable()) {
+            player.sendMessage("랭크전이 비활성화되어 있어요.");
+            return true;
+        }
+        if (args.length >= 2 && "top".equalsIgnoreCase(args[1])) {
+            int limit = 10;
+            if (args.length >= 3) {
+                try {
+                    limit = Integer.parseInt(args[2]);
+                } catch (NumberFormatException ignored) {
+                    player.sendMessage("사용법: /mj rank top [표시개수]");
+                    return true;
+                }
+            }
+            limit = Math.max(1, Math.min(limit, 50));
+            List<RankedProfile> top = rankedManager.getTopProfiles(limit);
+            player.sendMessage("랭크 TOP " + top.size());
+            int index = 1;
+            for (RankedProfile profile : top) {
+                RankedTier tier = rankedManager.resolveTier(profile.getRating());
+                String name = resolveProfileName(profile);
+                player.sendMessage(index + ". " + name + " - " + formatScore(profile.getRating()) + " (" + tier.getName() + ")");
+                index++;
+            }
+            return true;
+        }
+        RankedProfile profile = rankedManager.getProfile(player);
+        if (profile == null) {
+            player.sendMessage("랭크 정보를 불러올 수 없어요.");
+            return true;
+        }
+        RankedTier tier = rankedManager.resolveTier(profile.getRating());
+        player.sendMessage("내 랭크: " + tier.getName() + " (" + formatScore(profile.getRating()) + ")");
+        player.sendMessage("전적: " + profile.getGames() + "판 "
+                + "1위 " + profile.getFirsts() + " / 2위 " + profile.getSeconds()
+                + " / 3위 " + profile.getThirds() + " / 4위 " + profile.getFourths());
+        return true;
     }
 
     private boolean handleBotCommand(Player player, String[] args) {
@@ -741,6 +842,7 @@ public class MahjongCommand implements CommandExecutor, TabCompleter {
 
     private void sendRankedUsage(Player player) {
         player.sendMessage("랭크전: /mj ranked create | /mj ranked join <코드|tableId>");
+        player.sendMessage("매칭: /mj ranked queue | /mj ranked leave | /mj ranked status");
     }
 
     private void sendRoomRulesUsage(Player player) {
@@ -775,9 +877,32 @@ public class MahjongCommand implements CommandExecutor, TabCompleter {
         }
     }
 
+    private String resolveProfileName(RankedProfile profile) {
+        if (profile == null) {
+            return "Unknown";
+        }
+        String name = profile.getLastKnownName();
+        if (name != null && !name.isBlank()) {
+            return name;
+        }
+        String offlineName = Bukkit.getOfflinePlayer(profile.getPlayerId()).getName();
+        if (offlineName != null && !offlineName.isBlank()) {
+            return offlineName;
+        }
+        return profile.getPlayerId().toString();
+    }
+
+    private String formatScore(double value) {
+        if (Math.abs(value - Math.round(value)) < 0.0001) {
+            return Integer.toString((int) Math.round(value));
+        }
+        return String.format(java.util.Locale.ROOT, "%.1f", value);
+    }
+
     private void sendUsage(Player player) {
         player.sendMessage("마작 도움말");
         player.sendMessage("테이블: /mj table (GUI) | /mj create | /mj join <코드|tableId> | /mj ranked create|join <코드|tableId> | /mj spectate <코드|tableId> | /mj leave | /mj start");
+        player.sendMessage("랭크: /mj rank | /mj rank top [표시개수] | /mj ranked queue");
         player.sendMessage("로비 설정: /mj table ready | /mj table rules | /mj table status");
         player.sendMessage("플레이: /mj hand | /mj ron | /mj tsumo | /mj riichi");
         player.sendMessage("호출: /mj chi [번호] | /mj pon | /mj kan [번호]");

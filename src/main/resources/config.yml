@@ -22,6 +22,16 @@ round:
   maxHands: 8
 resourcePack:
   enabled: false
+database:
+  enabled: true
+  jdbcUrl: ""
+  host: "localhost"
+  port: 3306
+  database: "mahjong"
+  params: "useSSL=false&allowPublicKeyRetrieval=true"
+  user: "root"
+  password: ""
+  table: "mahjong_ranked_profiles"
 ui:
   preferWorld: false
   enableDialogs: false
@@ -33,6 +43,8 @@ ranked:
   enabled: true
   allowBots: false
   allowCoach: false
+  queue:
+    enabled: true
   length: SOUTH
   startingPoints: 25000
   targetPoints: 30000
@@ -53,6 +65,22 @@ ranked:
       - 10
       - -10
       - -20
+  tiers:
+    - id: bronze
+      name: Bronze
+      minRating: 0
+    - id: silver
+      name: Silver
+      minRating: 200
+    - id: gold
+      name: Gold
+      minRating: 400
+    - id: platinum
+      name: Platinum
+      minRating: 600
+    - id: diamond
+      name: Diamond
+      minRating: 800
 scoring:
   riichiStick: 1000
   honbaRonBonus: 300

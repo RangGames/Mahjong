@@ -1,16 +1,13 @@
 package wiki.creeper.mahjong.rank;
 
-import java.io.File;
-import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.UUID;
 import org.bukkit.Bukkit;
-import org.bukkit.configuration.ConfigurationSection;
-import org.bukkit.configuration.file.YamlConfiguration;
 import org.bukkit.entity.Player;
 import org.bukkit.plugin.java.JavaPlugin;
 import wiki.creeper.mahjong.api.event.MahjongRankUpdateEvent;
@@ -19,17 +16,21 @@ import wiki.creeper.mahjong.game.SeatWind;
 import wiki.creeper.mahjong.table.GameTable;
 
 public final class RankedManager {
+    private static final RankedTier DEFAULT_TIER = new RankedTier("default", "랭크", 0.0);
+
     private final JavaPlugin plugin;
+    private final RankedDatabase database;
     private final Map<UUID, RankedProfile> profiles = new HashMap<>();
     private RankedSettings settings;
-    private File file;
+    private List<RankedTier> tiers = new ArrayList<>();
 
     public RankedManager(JavaPlugin plugin) {
         this.plugin = plugin;
         plugin.getDataFolder().mkdirs();
         this.settings = RankedSettings.load(plugin);
-        this.file = new File(plugin.getDataFolder(), "ranked.yml");
-        load();
+        this.database = new RankedDatabase(plugin);
+        reloadTiers();
+        loadProfiles();
     }
 
     public RankedSettings getSettings() {
@@ -38,17 +39,54 @@ public final class RankedManager {
 
     public void reloadSettings() {
         this.settings = RankedSettings.load(plugin);
+        reloadTiers();
+    }
+
+    public boolean isAvailable() {
+        return settings.isEnabled() && database.isAvailable();
+    }
+
+    public RankedTier resolveTier(double rating) {
+        if (tiers.isEmpty()) {
+            return DEFAULT_TIER;
+        }
+        RankedTier current = tiers.get(0);
+        for (RankedTier tier : tiers) {
+            if (rating >= tier.getMinRating()) {
+                current = tier;
+            } else {
+                break;
+            }
+        }
+        return current;
+    }
+
+    public RankedTier getTier(UUID playerId) {
+        RankedProfile profile = profiles.get(playerId);
+        if (profile == null) {
+            return DEFAULT_TIER;
+        }
+        return resolveTier(profile.getRating());
     }
 
     public RankedProfile getProfile(UUID playerId) {
-        return profiles.computeIfAbsent(playerId, id -> new RankedProfile(id, 0.0, 0, 0, 0, 0, 0));
+        return profiles.computeIfAbsent(playerId, id -> new RankedProfile(id, null, 0.0, 0, 0, 0, 0, 0));
+    }
+
+    public RankedProfile getProfile(Player player) {
+        if (player == null) {
+            return null;
+        }
+        RankedProfile profile = getProfile(player.getUniqueId());
+        profile.setLastKnownName(player.getName());
+        return profile;
     }
 
     public void updateOnGameEnd(GameTable table, Map<UUID, Integer> pointsAfter) {
         if (table == null || pointsAfter == null || pointsAfter.isEmpty()) {
             return;
         }
-        if (!settings.isEnabled() || !table.isRanked()) {
+        if (!isAvailable() || !table.isRanked()) {
             return;
         }
         int[] uma = settings.getUmaForLength();
@@ -58,6 +96,8 @@ public final class RankedManager {
         }
         Map<UUID, Double> deltas = new HashMap<>();
         Map<UUID, Double> ratings = new HashMap<>();
+        Map<UUID, RankedTier> tierChanges = new HashMap<>();
+        List<RankedProfile> updatedProfiles = new ArrayList<>();
         for (int i = 0; i < entries.size(); i++) {
             RankEntry entry = entries.get(i);
             double base = (entry.points - settings.getTargetPoints()) / 1000.0;
@@ -67,13 +107,43 @@ public final class RankedManager {
             }
             delta = roundOneDecimal(delta);
             RankedProfile profile = getProfile(entry.playerId);
+            Player online = plugin.getServer().getPlayer(entry.playerId);
+            if (online != null) {
+                profile.setLastKnownName(online.getName());
+            }
+            RankedTier beforeTier = resolveTier(profile.getRating());
             profile.applyResult(i + 1, delta);
+            RankedTier afterTier = resolveTier(profile.getRating());
+            if (!beforeTier.getId().equalsIgnoreCase(afterTier.getId())) {
+                tierChanges.put(entry.playerId, afterTier);
+            }
             deltas.put(entry.playerId, delta);
             ratings.put(entry.playerId, profile.getRating());
+            updatedProfiles.add(profile);
         }
-        save();
+        persistProfilesAsync(updatedProfiles);
         Bukkit.getPluginManager().callEvent(new MahjongRankUpdateEvent(table, deltas, ratings));
-        notifyPlayers(deltas, ratings);
+        notifyPlayers(deltas, ratings, tierChanges);
+    }
+
+    public List<RankedProfile> getTopProfiles(int limit) {
+        if (limit <= 0) {
+            return List.of();
+        }
+        List<RankedProfile> list = new ArrayList<>(profiles.values());
+        list.sort(Comparator.comparingDouble(RankedProfile::getRating).reversed()
+                .thenComparing(Comparator.comparingInt(RankedProfile::getGames).reversed()));
+        if (list.size() <= limit) {
+            return list;
+        }
+        return list.subList(0, limit);
+    }
+
+    public void save() {
+        if (!database.isAvailable()) {
+            return;
+        }
+        database.saveProfiles(new ArrayList<>(profiles.values()));
     }
 
     private List<RankEntry> buildEntries(GameTable table, Map<UUID, Integer> pointsAfter) {
@@ -111,7 +181,7 @@ public final class RankedManager {
         return Math.round(value * 10.0) / 10.0;
     }
 
-    private void notifyPlayers(Map<UUID, Double> deltas, Map<UUID, Double> ratings) {
+    private void notifyPlayers(Map<UUID, Double> deltas, Map<UUID, Double> ratings, Map<UUID, RankedTier> tierChanges) {
         for (Map.Entry<UUID, Double> entry : deltas.entrySet()) {
             Player player = plugin.getServer().getPlayer(entry.getKey());
             if (player == null) {
@@ -119,7 +189,12 @@ public final class RankedManager {
             }
             double delta = entry.getValue();
             double rating = ratings.getOrDefault(entry.getKey(), 0.0);
-            player.sendMessage("랭크 포인트 " + formatDelta(delta) + " (현재 " + formatScore(rating) + ")");
+            RankedTier tier = resolveTier(rating);
+            player.sendMessage("랭크 포인트 " + formatDelta(delta) + " (현재 " + formatScore(rating) + ", " + tier.getName() + ")");
+            RankedTier changed = tierChanges.get(entry.getKey());
+            if (changed != null) {
+                player.sendMessage("랭크가 변경됐어요: " + changed.getName());
+            }
         }
     }
 
@@ -132,56 +207,58 @@ public final class RankedManager {
         if (Math.abs(value - Math.round(value)) < 0.0001) {
             return Integer.toString((int) Math.round(value));
         }
-        return String.format(java.util.Locale.ROOT, "%.1f", value);
+        return String.format(Locale.ROOT, "%.1f", value);
     }
 
-    private void load() {
+    private void loadProfiles() {
         profiles.clear();
-        if (!file.exists()) {
+        if (!database.isAvailable()) {
+            if (settings.isEnabled()) {
+                plugin.getLogger().warning("Ranked database is unavailable. Ranked data will not persist.");
+            }
             return;
         }
-        YamlConfiguration config = YamlConfiguration.loadConfiguration(file);
-        ConfigurationSection players = config.getConfigurationSection("players");
-        if (players == null) {
+        for (RankedProfile profile : database.loadAllProfiles()) {
+            profiles.put(profile.getPlayerId(), profile);
+        }
+    }
+
+    private void persistProfilesAsync(List<RankedProfile> profilesToSave) {
+        if (!database.isAvailable() || profilesToSave == null || profilesToSave.isEmpty()) {
             return;
         }
-        for (String key : players.getKeys(false)) {
-            try {
-                UUID id = UUID.fromString(key);
-                ConfigurationSection section = players.getConfigurationSection(key);
-                if (section == null) {
+        List<RankedProfile> snapshot = new ArrayList<>(profilesToSave);
+        Bukkit.getScheduler().runTaskAsynchronously(plugin, () -> database.saveProfiles(snapshot));
+    }
+
+    private void reloadTiers() {
+        List<RankedTier> loaded = new ArrayList<>();
+        for (Map<?, ?> entry : plugin.getConfig().getMapList("ranked.tiers")) {
+            Object idObj = entry.get("id");
+            Object nameObj = entry.get("name");
+            Object minObj = entry.get("minRating");
+            if (idObj == null || nameObj == null || minObj == null) {
+                continue;
+            }
+            String id = idObj.toString();
+            String name = nameObj.toString();
+            double minRating;
+            if (minObj instanceof Number) {
+                minRating = ((Number) minObj).doubleValue();
+            } else {
+                try {
+                    minRating = Double.parseDouble(minObj.toString());
+                } catch (NumberFormatException e) {
                     continue;
                 }
-                double rating = section.getDouble("rating", 0.0);
-                int games = section.getInt("games", 0);
-                int firsts = section.getInt("firsts", 0);
-                int seconds = section.getInt("seconds", 0);
-                int thirds = section.getInt("thirds", 0);
-                int fourths = section.getInt("fourths", 0);
-                profiles.put(id, new RankedProfile(id, rating, games, firsts, seconds, thirds, fourths));
-            } catch (IllegalArgumentException ignored) {
-                // ignore invalid UUIDs
             }
+            loaded.add(new RankedTier(id, name, minRating));
         }
-    }
-
-    public void save() {
-        YamlConfiguration config = new YamlConfiguration();
-        ConfigurationSection players = config.createSection("players");
-        for (RankedProfile profile : profiles.values()) {
-            ConfigurationSection section = players.createSection(profile.getPlayerId().toString());
-            section.set("rating", profile.getRating());
-            section.set("games", profile.getGames());
-            section.set("firsts", profile.getFirsts());
-            section.set("seconds", profile.getSeconds());
-            section.set("thirds", profile.getThirds());
-            section.set("fourths", profile.getFourths());
+        if (loaded.isEmpty()) {
+            loaded.add(DEFAULT_TIER);
         }
-        try {
-            config.save(file);
-        } catch (IOException e) {
-            plugin.getLogger().warning("Failed to save ranked.yml: " + e.getMessage());
-        }
+        loaded.sort(Comparator.comparingDouble(RankedTier::getMinRating));
+        tiers = loaded;
     }
 
     private static final class RankEntry {
